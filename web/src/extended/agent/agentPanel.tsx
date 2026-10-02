@@ -8,6 +8,7 @@ import { renderMarkdown } from '../markdown';
 import { useTestCase } from '../insights/attemptsCompare';
 import { buildPrompt } from '../insights/actions';
 import { texts } from '../i18n';
+import { useCopy } from '../clipboard';
 import './agent.css';
 
 type AgentStatus = { enabled: boolean, model: string, canRun: boolean, canApply: boolean, tracesFromDisk: boolean, mcp?: { servers: { name: string, status: string, tools: number }[] } };
@@ -369,14 +370,11 @@ const DiffView: React.FC<{ diff: string }> = ({ diff }) => {
 
 export const CopyButton: React.FC<{ label: string, text: string | undefined }> = ({ label, text }) => {
   const t = texts();
-  const [copied, setCopied] = React.useState(false);
-  return <button className='button' disabled={!text} onClick={async () => {
-    if (!text)
-      return;
-    await navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
-  }}>{copied ? t.copied : label}</button>;
+  const { copied, copy, fallback } = useCopy();
+  return <>
+    <button className='button' disabled={!text} onClick={() => text && copy('x', text)}>{copied ? t.copied : label}</button>
+    {fallback && <div className='manual-copy-anchor'>{fallback}</div>}
+  </>;
 };
 
 function renderInline(markdown: string): string {

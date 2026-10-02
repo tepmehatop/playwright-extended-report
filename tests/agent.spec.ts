@@ -158,6 +158,32 @@ test.describe('agent with a repository', () => {
     await expect.poll(() => fs.existsSync(ideLog) ? fs.readFileSync(ideLog, 'utf-8') : '').toContain(path.join('example', 'tests', 'shop.spec.ts') + ' 26');
   });
 
+  test('copy buttons work without clipboard permission (webview, http)', async ({ page }) => {
+    // No clipboard permission granted on purpose: navigator.clipboard.writeText is denied here.
+    await page.goto(server.url + '#?tab=insights');
+    const c = card(page, 'cart › removes item from cart');
+    await c.getByRole('button', { name: 'Ask AI' }).click();
+    await expect(c.getByTestId('agent-answer')).toBeVisible();
+    await page.evaluate(() => document.addEventListener('copy', () => {
+      const a = document.activeElement as HTMLTextAreaElement;
+      (window as any).__copied = a && 'value' in a ? a.value.slice(a.selectionStart, a.selectionEnd) : String(document.getSelection());
+    }, true));
+    for (const [name, start] of [['Копировать анализ', '> **Шаблонный ответ**'], ['Копировать промпт', 'Разбери, почему упал этот тест Playwright.']]) {
+      await c.getByRole('button', { name }).click();
+      await expect(c.getByRole('button', { name: 'Скопировано' })).toBeVisible();
+      expect(await page.evaluate(() => (window as any).__copied)).toContain(start);
+      await expect(c.getByRole('button', { name: 'Скопировано' })).toHaveCount(0, { timeout: 5000 });
+    }
+    // A browser that blocks every way of copying: the text is shown selected for Ctrl+C.
+    await page.evaluate(() => {
+      document.execCommand = () => false;
+      Object.defineProperty(navigator, 'clipboard', { value: undefined });
+    });
+    await c.getByRole('button', { name: 'Копировать анализ' }).click();
+    await expect(c.getByTestId('manual-copy')).toContainText('нажмите Ctrl+C');
+    expect(await c.getByTestId('manual-copy').locator('textarea').evaluate((t: HTMLTextAreaElement) => t.selectionEnd - t.selectionStart)).toBeGreaterThan(100);
+  });
+
   test('Ask AI and Fix are on the test page next to Copy prompt', async ({ page }) => {
     await page.goto(server.url + '#?q=s%3Afailed');
     await page.getByRole('link', { name: 'removes item from cart' }).first().click();

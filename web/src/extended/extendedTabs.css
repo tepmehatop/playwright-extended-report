@@ -271,3 +271,36 @@
 .link-button:hover {
   text-decoration: underline;
 }
+
+.manual-copy-anchor {
+  flex-basis: 100%;
+  width: 100%;
+}
+
+.manual-copy {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--color-attention-muted);
+  border-radius: 6px;
+  background: var(--color-attention-subtle);
+  font-size: 12px;
+}
+
+.manual-copy-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  color: var(--color-fg-default);
+}
+
+.manual-copy textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--monospace-font, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 12px;
+  color: var(--color-fg-default);
+  background: var(--color-canvas-default);
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+}

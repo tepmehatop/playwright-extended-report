@@ -2,6 +2,7 @@ import * as React from 'react';
 import { Dialog } from '@web/shared/dialog';
 import type { InsightsData, InsightTest, NetworkIssue } from '../../../../src/shared/insightsFormat';
 import { reportLang, texts } from '../i18n';
+import { useCopy } from '../clipboard';
 
 const kKindNames = {
   ru: { 'product-bug': 'баг продукта', 'test-bug': 'ошибка теста', 'environment': 'окружение', 'ui-change': 'изменение UI', 'flaky': 'нестабильный тест', 'unknown': 'не определено' },
@@ -135,12 +136,7 @@ export const FixMenu: React.FC<{ test: InsightTest, data?: InsightsData, onAgent
   const t = texts();
   const anchor = React.useRef<HTMLButtonElement>(null);
   const [open, setOpen] = React.useState(false);
-  const [copied, setCopied] = React.useState<string>();
-  const copy = async (what: string, text: string) => {
-    await navigator.clipboard.writeText(text);
-    setCopied(what);
-    setTimeout(() => setCopied(undefined), 3000);
-  };
+  const { copied, copy, fallback } = useCopy();
   return <>
     <button ref={anchor} className='button' aria-haspopup='menu' aria-expanded={open} onClick={() => setOpen(!open)}>{label ?? t.fixMenu}</button>
     <Dialog open={open} anchor={anchor} minWidth={300} verticalOffset={4} requestClose={() => setOpen(false)} dataTestId='fix-menu'>
@@ -152,6 +148,7 @@ export const FixMenu: React.FC<{ test: InsightTest, data?: InsightsData, onAgent
         <button role='menuitem' onClick={() => copy('healer', healerPrompt(test))}>{copied === 'healer' ? `${t.copied} ✓` : t.copyFixPrompt}</button>
         <button role='menuitem' onClick={() => copy('rerun', rerunCommand(test))}>{copied === 'rerun' ? `${t.copied} ✓` : t.copyRerun}</button>
         {data?.fix?.urlTemplate && <a role='menuitem' href={fillTemplate(data.fix.urlTemplate, test)} target='_blank' rel='noreferrer'>{t.runFixJob}</a>}
+        {fallback}
       </div>
     </Dialog>
   </>;

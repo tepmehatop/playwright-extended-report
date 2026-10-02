@@ -7,6 +7,7 @@ import type { LoadedReport } from '../loadedReport';
 import type { TestCaseSummary } from '../types';
 import { extendedTabs, findExtendedTab, type ExtendedTab } from './extendedTabs';
 import { sortSections } from '../../../src/shared/tabsFormat';
+import { useCopy } from './clipboard';
 import { tabIcon } from './icons';
 import { renderMarkdown, sanitizeHtml, slugify } from './markdown';
 import { InsightsView } from './insights/insightsView';
@@ -53,7 +54,7 @@ export const ExtendedTabView: React.FC<{
 type Exportable = { id: string, title: string, format: string, content: string, description?: string, generatedAt?: string, source?: string };
 
 const TabToolbar: React.FC<{ item: Exportable, compact?: boolean }> = ({ item, compact }) => {
-  const [copied, setCopied] = React.useState(false);
+  const { copied, copy, fallback } = useCopy();
   const canExport = item.format === 'markdown' || item.format === 'html';
   const meta = [
     item.generatedAt && `Generated: ${formatDate(item.generatedAt)}`,
@@ -68,13 +69,10 @@ const TabToolbar: React.FC<{ item: Exportable, compact?: boolean }> = ({ item, c
     </div>
     <div style={{ flex: 'auto' }}></div>
     {canExport && <>
-      <button className='button' onClick={async () => {
-        await navigator.clipboard.writeText(item.content);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 3000);
-      }}>{copied ? 'Copied' : item.format === 'markdown' ? 'Copy Markdown' : 'Copy HTML'}</button>
+      <button className='button' onClick={() => copy('x', item.content)}>{copied ? 'Copied' : item.format === 'markdown' ? 'Copy Markdown' : 'Copy HTML'}</button>
       <button className='button' onClick={() => download(item)}>Download</button>
     </>}
+    {fallback && <div className='manual-copy-anchor'>{fallback}</div>}
   </div>;
 };
 
