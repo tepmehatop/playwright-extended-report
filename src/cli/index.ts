@@ -10,6 +10,8 @@ import path from 'path';
 import { isValidBadgeKind, isValidTabIcon, kFailureAnalysisTabId, kSkillSectionId, readTabs, removeSection, removeTab, upsertSection, upsertTab } from '../tabs';
 import { showReport, startAiGateway } from '../server';
 import { AgentService } from '../agent/service';
+import { analyzeReport } from '../agent/batch';
+import { McpHub, loadMcpConfig } from '../agent/mcp';
 import { llmConfigFromEnv } from '../agent/llm';
 import { Repo } from '../agent/repo';
 
@@ -40,7 +42,7 @@ Commands:
   add-analysis [report-dir] --file <path>
                              Put your skill / LLM analysis into the "Failure analysis" tab
                              (above the automatic error grouping). Replaces the previous one.
-      --title <title>        Section title. Default: "Skill analysis".
+      --title <title>        Section title. Default: "Анализ скилла" / "Skill analysis".
       --source <text>        Where it came from, e.g. "jenkins-log-skill #123".
       --optional             Do nothing if --file does not exist.
 
@@ -61,9 +63,21 @@ Commands:
   agent [report-dir] [--repo <dir>] [--ai-mock] [--port <port>]
                              Same as "show --ai --repo .": run it inside the tests repository.
 
-  ai-gateway [--host <host>] [--port <port>] [--ai-mock]
+  ai-gateway [--host <host>] [--port <port>] [--ai-mock] [--repo <dir>] [--allow-run]
                              Standalone agent backend with CORS for reports hosted elsewhere
-                             (Jenkins): analysis only. Point EXTENDED_REPORT_AI_ENDPOINT to it.
+                             (Jenkins). Point EXTENDED_REPORT_AI_ENDPOINT to it. With --repo the agent
+                             reads sources from the repository (and MCP gets \${REPO}); --allow-run
+                             also enables re-runs and fixes there.
+
+  analyze [report-dir] [--max <n>] [--scope groups|tests] [--agent-url <url>] [--repo <dir>] [--strict]
+                             AI analysis in CI right after the run: one request per error group
+                             (largest first, default --max 10), written into the report.
+                             Runs the agent in-process, or delegates to --agent-url (a running ai-gateway).
+
+  Agent options (show --ai / agent / ai-gateway / analyze):
+      --mcp-config <file>    MCP servers (mcpServers JSON). Default lookup: EXTENDED_REPORT_MCP_CONFIG,
+                             <repo>/.pw-extended-report/mcp.json, <repo>/.mcp.json, ~/.pw-extended-report/mcp.json
+      --no-mcp               Do not use MCP servers (simple path only).
   help
 
 Examples:
@@ -89,7 +103,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       }
       const name = arg.slice(2);
       const next = rest[i + 1];
-      if (next !== undefined && (!next.startsWith('--') || next === '-') && !['optional', 'no-open', 'ai', 'ai-mock'].includes(name)) {
+      if (next !== undefined && (!next.startsWith('--') || next === '-') && !['optional', 'no-open', 'ai', 'ai-mock', 'allow-run', 'strict', 'no-mcp'].includes(name)) {
         flags.set(name, next);
         ++i;
       } else {
@@ -186,6 +200,20 @@ async function addSection(reportDir: string, tabId: string, flags: ParsedArgs['f
     console.log(`Section "${id}" written to tab "${tabId}" in ${path.join(reportDir, 'index.html')}`);
 }
 
+function makeAgent(flags: ParsedArgs['flags'], options: { reportDir?: string, repoDir?: string, allowRun?: boolean, cors?: string }): AgentService {
+  const repo = options.repoDir ? new Repo(options.repoDir, stringFlag(flags, 'config')) : undefined;
+  const { config, source } = flags.has('no-mcp') ? { config: { mcpServers: {} }, source: undefined } : loadMcpConfig({ configFile: stringFlag(flags, 'mcp-config'), repoDir: repo?.dir });
+  const mcp = Object.keys(config.mcpServers).length ? new McpHub(config, source) : undefined;
+  return new AgentService({
+    llm: llmConfigFromEnv({ mock: flags.has('ai-mock') }),
+    reportDir: options.reportDir,
+    repo,
+    allowRun: options.allowRun,
+    mcp,
+    corsOrigin: options.cors,
+  });
+}
+
 async function main() {
   const { command, positional, flags } = parseArgs(process.argv.slice(2));
   const reportDir = path.resolve(positional[0] || kDefaultReportDir);
@@ -196,7 +224,12 @@ async function main() {
     case 'add-analysis':
       if (!flags.has('file') && !flags.has('content'))
         throw new Error('--file is required');
-      await addSection(reportDir, kFailureAnalysisTabId, flags, { id: kSkillSectionId, title: 'Skill analysis', order: 10 });
+      {
+        // Title in the report's language, as set by the reporter's placeholder.
+        const tab = (await readTabs(reportDir)).find(t => t.id === kFailureAnalysisTabId);
+        const title = tab?.placeholders?.find(p => p.sectionId === kSkillSectionId)?.title ?? 'Skill analysis';
+        await addSection(reportDir, kFailureAnalysisTabId, flags, { id: kSkillSectionId, title, order: 10 });
+      }
       return;
     case 'add-section': {
       const tab = stringFlag(flags, 'tab');
@@ -236,23 +269,38 @@ async function main() {
       const port = stringFlag(flags, 'port');
       const withAi = flags.has('ai') || flags.has('ai-mock');
       const repoDir = stringFlag(flags, 'repo');
-      const agent = withAi ? new AgentService({ llm: llmConfigFromEnv({ mock: flags.has('ai-mock') }), reportDir, repo: repoDir ? new Repo(repoDir, stringFlag(flags, 'config')) : undefined }) : undefined;
+      const agent = withAi ? makeAgent(flags, { reportDir, repoDir }) : undefined;
       await showReport(reportDir, { host: stringFlag(flags, 'host'), port: port ? +port : undefined, open: !flags.has('no-open'), agent });
       return;
     }
     case 'agent': {
       const port = stringFlag(flags, 'port');
-      const repo = new Repo(stringFlag(flags, 'repo') || process.cwd(), stringFlag(flags, 'config'));
-      const agent = new AgentService({ llm: llmConfigFromEnv({ mock: flags.has('ai-mock') }), reportDir, repo });
+      const agent = makeAgent(flags, { reportDir, repoDir: stringFlag(flags, 'repo') || process.cwd() });
       await showReport(reportDir, { host: stringFlag(flags, 'host'), port: port ? +port : undefined, open: !flags.has('no-open'), agent });
       return;
     }
     case 'ai-gateway': {
       const port = stringFlag(flags, 'port');
-      const agent = new AgentService({ llm: llmConfigFromEnv({ mock: flags.has('ai-mock') }), corsOrigin: process.env.EXTENDED_REPORT_AI_CORS_ORIGIN || '*' });
+      const agent = makeAgent(flags, { repoDir: stringFlag(flags, 'repo'), allowRun: flags.has('allow-run'), cors: process.env.EXTENDED_REPORT_AI_CORS_ORIGIN || '*' });
       const gateway = await startAiGateway(agent, { host: stringFlag(flags, 'host'), port: port ? +port : undefined });
-      console.log(`AI agent gateway: ${gateway.url}api/agent/ (${agent.status().model}). Analysis only.`);
+      const status = agent.status();
+      console.log(`AI agent gateway: ${gateway.url} (${status.model}).`);
+      console.log(status.repo ? `Repository: ${status.repo}${status.canRun ? ' (run & fix enabled)' : ' (read only)'}` : 'No repository: analysis from traces only.');
+      if (status.mcp)
+        console.log(`MCP config: ${status.mcp.config}`);
       await new Promise(() => {});
+      return;
+    }
+    case 'analyze': {
+      const agentUrl = stringFlag(flags, 'agent-url');
+      const max = stringFlag(flags, 'max');
+      const scope = stringFlag(flags, 'scope') === 'tests' ? 'tests' : 'groups';
+      const agent = agentUrl ? undefined : makeAgent(flags, { reportDir, repoDir: stringFlag(flags, 'repo'), allowRun: false });
+      const { analyzed, failed } = await analyzeReport(reportDir, { agent, agentUrl, max: max ? +max : undefined, scope, log: line => console.log(line) });
+      console.log(`AI analysis: ${analyzed} done, ${failed} failed. Written to ${path.join(reportDir, 'index.html')}`);
+      await agent?.close();
+      if (failed && flags.has('strict'))
+        process.exitCode = 1;
       return;
     }
     case undefined:

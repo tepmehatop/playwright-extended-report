@@ -5,8 +5,11 @@
  * analysis is verifiable even when the model is weak.
  */
 
+import { describeLab } from './locatorLab';
 import { sha1 } from './trace';
 
+import type { LabResult } from './locatorLab';
+import type { Lang } from './prompts';
 import type { DomElement, DomState, TraceData } from './trace';
 import type { InsightTest } from '../shared/insightsFormat';
 
@@ -33,7 +36,10 @@ type ReportStep = { title: string, duration: number, error?: string, steps: Repo
 export type LocatorCandidate = { code: string, reason: string, element: string };
 
 export type EvidenceInput = {
+  lang: Lang;
   test: ReportTestCase;
+  /** Locator lab results on the DOM at failure (failing locator + candidates). */
+  lab?: LabResult[];
   /** Index of the attempt being analyzed. */
   attempt: number;
   insight?: InsightTest;
@@ -52,16 +58,64 @@ export type Evidence = {
   truncated: boolean;
 };
 
+
+const kTitles = {
+  test: { ru: 'Тест', en: 'Test' },
+  hint: { ru: 'Подсказка инженера (доверяй, но проверь по доказательствам)', en: 'Hint from the engineer (trust it, but verify against the evidence)' },
+  error: { ru: 'Ошибка', en: 'Error' },
+  failing: { ru: 'Упавшее действие (из трейса)', en: 'Failing action (from the trace)' },
+  page: { ru: 'Страница в момент падения', en: 'Page at the moment of failure' },
+  similar: { ru: 'Элементы на странице, похожие на упавший локатор', en: 'Elements on the page similar to the failing locator' },
+  lab: { ru: 'Locator lab: проверка локаторов на DOM момента падения', en: 'Locator lab: locators checked on the DOM at failure' },
+  classification: { ru: 'Классификация по правилам (эвристика, может ошибаться)', en: 'Rule-based classification (heuristic, may be wrong)' },
+  network: { ru: 'Упавшие сетевые запросы', en: 'Failed network requests' },
+  console: { ru: 'Ошибки консоли браузера / необработанные исключения', en: 'Browser console errors / uncaught exceptions' },
+  source: { ru: 'Исходный код', en: 'Source' },
+  steps: { ru: 'Шаги теста (из отчёта)', en: 'Test steps (report)' },
+  actions: { ru: 'Действия в браузере перед падением', en: 'Browser actions before the failure' },
+  requests: { ru: 'Последние сетевые запросы', en: 'Last network requests' },
+  attempts: { ru: 'Другие попытки', en: 'Other attempts' },
+  history: { ru: 'История прошлых прогонов', en: 'History of previous runs' },
+  rerun: { ru: 'Локальный перезапуск теста (выполнен агентом только что)', en: 'Local re-run of the test (performed by the agent just now)' },
+  errorContext: { ru: 'Снапшот страницы (ARIA) и контекст из вложения error-context', en: 'Page snapshot (ARIA) and context from the error-context attachment' },
+};
+
+const kPhrases = {
+  title: { ru: 'Название', en: 'Title' }, project: { ru: 'Проект', en: 'Project' }, location: { ru: 'Расположение', en: 'Location' },
+  outcome: { ru: 'Итог', en: 'Outcome' }, analyzed: { ru: 'разбирается попытка', en: 'analyzed attempt' }, of: { ru: 'из', en: 'of' },
+  attempts: { ru: 'Попытки', en: 'Attempts' }, action: { ru: 'Действие', en: 'Action' }, locator: { ru: 'Локатор', en: 'Locator' },
+  params: { ru: 'Параметры', en: 'Params' }, duration: { ru: 'Длительность', en: 'Duration' },
+  unfinished: { ru: 'Не завершилось (тест закончился во время ожидания)', en: 'Did not finish (test ended while waiting)' },
+  callLog: { ru: 'Лог ожидания', en: 'Call log' }, element: { ru: 'элемент', en: 'element' },
+  noneSimilar: { ru: 'Не найдено: нет элементов с похожим test id, текстом или ролью.', en: 'None found: no element with a similar test id, text or role.' },
+  status: { ru: 'Статус', en: 'Status' }, in: { ru: 'за', en: 'in' },
+  same: { ru: 'Та же ошибка, что в отчёте: падение воспроизводится.', en: 'Same error as in the report: the failure reproduces.' },
+  different: { ru: 'Ошибка отличается от отчёта.', en: 'Different error than in the report.' },
+  passedLocally: { ru: 'Тест ПРОШЁЛ локально: исходное падение связано с окружением / данными / таймингами или уже исправлено.', en: 'The test PASSED locally: the original failure is environment / data / timing related, or already fixed.' },
+  rerunPage: { ru: 'Страница в момент падения при перезапуске', en: 'Page at failure in the re-run' },
+  rerunNet: { ru: 'Упавшие запросы при перезапуске', en: 'Failed requests in the re-run' },
+  failedIn: { ru: 'Падал в', en: 'Failed in' }, runs: { ru: 'прогонах', en: 'runs' }, newFailure: { ru: 'НОВОЕ падение.', en: 'NEW failure.' },
+  oldNew: { ru: 'старые → новые', en: 'old → new' },
+  blank: { ru: '**Тело страницы ПУСТОЕ в момент падения** (пустая страница: неожиданная навигация, редирект, падение или ничего не отрисовалось).', en: '**The page body is EMPTY at the moment of failure** (blank page: unexpected navigation, redirect, crash or nothing rendered).' },
+  navigation: { ru: 'История навигации', en: 'Navigation history' },
+  outline: { ru: 'Структура DOM (тег, ключевые атрибуты, текст)', en: 'DOM outline (tag, key attributes, text)' },
+  truncated: { ru: '…(обрезано)', en: '…(truncated)' },
+};
+
+type PhraseKey = keyof typeof kPhrases;
+
 const ansi = /\u001b\[[0-9;]*m/g;
 const strip = (s: string) => (s || '').replace(ansi, '');
 
 export function buildEvidence(input: EvidenceInput, maxChars: number): Evidence {
-  const { test, trace } = input;
+  const { test, trace, lang } = input;
+  const T = (key: keyof typeof kTitles) => kTitles[key][lang];
+  const P = (key: PhraseKey) => kPhrases[key][lang];
   const result = test.results[input.attempt] ?? test.results[test.results.length - 1];
   const failing = trace?.failingAction;
   const failingLocator = failing?.locator ?? matchLine(result?.errors[0]?.message, /^Locator: (.+)$/m);
   const expected = matchLine(result?.errors[0]?.message, /^Expected(?: string| pattern)?: (.+)$/m);
-  const candidates = trace?.dom && failingLocator ? findLocatorCandidates(failingLocator, expected, trace.dom.elements) : [];
+  const candidates = trace?.dom && failingLocator ? findLocatorCandidates(failingLocator, expected, trace.dom.elements, lang) : [];
 
   // Priority: lower number = kept first when the budget is tight.
   const sections: { priority: number, title: string, body: string }[] = [];
@@ -70,88 +124,96 @@ export function buildEvidence(input: EvidenceInput, maxChars: number): Evidence 
       sections.push({ priority, title, body: body.trim() });
   };
 
-  add(0, 'Test', [
-    `Title: ${[...test.path, test.title].join(' › ')}`,
-    `Project: ${test.projectName || '—'}`,
-    `Location: ${test.location.file}:${test.location.line}`,
-    `Outcome: ${test.outcome}; analyzed attempt #${input.attempt + 1} of ${test.results.length}`,
-    `Attempts: ${test.results.map((r, i) => `#${i + 1} ${r.status} (${Math.round(r.duration)}ms)`).join(', ')}`,
+  add(0, T('test'), [
+    `${P('title')}: ${[...test.path, test.title].join(' › ')}`,
+    `${P('project')}: ${test.projectName || '—'}`,
+    `${P('location')}: ${test.location.file}:${test.location.line}`,
+    `${P('outcome')}: ${test.outcome}; ${P('analyzed')} #${input.attempt + 1} ${P('of')} ${test.results.length}`,
+    `${P('attempts')}: ${test.results.map((r, i) => `#${i + 1} ${r.status} (${Math.round(r.duration)}ms)`).join(', ')}`,
   ].join('\n'));
 
   if (input.comment)
-    add(0, 'Hint from the engineer (trust it, but verify against the evidence)', input.comment);
+    add(0, T('hint'), input.comment);
 
-  add(1, 'Error', (result?.errors || []).slice(0, 2).map(e => '```\n' + clip(strip(e.message), 40, 4000) + '\n```').join('\n'));
+  add(1, T('error'), (result?.errors || []).slice(0, 2).map(e => '```\n' + clip(strip(e.message), 40, 4000) + '\n```').join('\n'));
 
   if (failing) {
-    add(1, 'Failing action (from the trace)', [
-      `Action: ${failing.title}`,
-      failing.locator ? `Locator: ${failing.locator}` : '',
-      failing.params ? `Params: ${failing.params}` : '',
-      failing.endTime !== undefined ? `Duration: ${Math.round(failing.endTime - failing.startTime)}ms` : 'Did not finish (test ended while waiting)',
-      failing.logs.length ? 'Call log:\n```\n' + failing.logs.slice(0, 30).join('\n') + '\n```' : '',
+    add(1, T('failing'), [
+      `${P('action')}: ${failing.title}`,
+      failing.locator ? `${P('locator')}: ${failing.locator}` : '',
+      failing.params ? `${P('params')}: ${failing.params}` : '',
+      failing.endTime !== undefined ? `${P('duration')}: ${Math.round(failing.endTime - failing.startTime)}ms` : P('unfinished'),
+      failing.logs.length ? `${P('callLog')}:\n\`\`\`\n` + failing.logs.slice(0, 30).join('\n') + '\n```' : '',
     ].filter(Boolean).join('\n'));
   }
 
   if (trace?.dom)
-    add(2, 'Page at the moment of failure', describeDom(trace.dom, trace.pageUrls));
+    add(2, T('page'), describeDom(trace.dom, trace.pageUrls, lang));
 
   if (candidates.length) {
-    add(2, 'Elements on the page similar to the failing locator', candidates.map(c => `- \`${c.code}\` — ${c.reason}; element: \`${c.element}\``).join('\n'));
+    add(2, T('similar'), candidates.map(c => `- \`${c.code}\` — ${c.reason}; ${P('element')}: \`${c.element}\``).join('\n'));
   } else if (failingLocator && trace?.dom && !trace.dom.isBlank) {
-    add(2, 'Elements on the page similar to the failing locator', 'None found: no element with a similar test id, text or role.');
+    add(2, T('similar'), P('noneSimilar'));
   }
+
+  if (input.lab?.length)
+    add(2, T('lab'), describeLab(input.lab, lang));
 
   if (input.insight?.classification) {
     const c = input.insight.classification;
-    add(3, 'Rule-based classification (heuristic, may be wrong)', `${c.kind} (${c.confidence}): ${c.reason}\n${c.evidence.map(e => `- ${e}`).join('\n')}`);
+    add(3, T('classification'), `${c.kind} (${c.confidence}): ${c.reason}\n${c.evidence.map(e => `- ${e}`).join('\n')}`);
   }
 
-  const network = trace?.network.length ? trace.network : input.insight?.network ?? [];
-  if (network.length)
-    add(3, 'Failed network requests', network.map(n => `- ${n.method} ${n.url} → ${n.status || 'failed'} ${n.failure || n.statusText || ''}`).join('\n'));
+  const failedRequests = trace?.failedRequests ?? [];
+  if (failedRequests.length) {
+    add(3, T('network'), failedRequests.map(n => `- ${n.method} ${n.url} → ${n.status || 'failed'} ${n.failure || n.statusText || ''}${n.requestBody ? `\n  request body: ${clip(n.requestBody, 3, 400)}` : ''}${n.responseBody ? `\n  response body: ${clip(n.responseBody, 5, 600)}` : ''}`).join('\n'));
+  } else {
+    const network = input.insight?.network ?? [];
+    if (network.length)
+      add(3, T('network'), network.map(n => `- ${n.method} ${n.url} → ${n.status || 'failed'} ${n.failure || n.statusText || ''}`).join('\n'));
+  }
 
   const consoleIssues = trace?.console.length ? trace.console : input.insight?.console ?? [];
   if (consoleIssues.length)
-    add(3, 'Browser console errors / uncaught exceptions', consoleIssues.slice(0, 12).map(m => `- ${m.kind}: ${clip(m.text, 6, 600).replace(/\n/g, ' ⏎ ')}`).join('\n'));
+    add(3, T('console'), consoleIssues.slice(0, 12).map(m => `- ${m.kind}: ${clip(m.text, 6, 600).replace(/\n/g, ' ⏎ ')}`).join('\n'));
 
   for (const source of input.sources || [])
-    add(3, `Source: ${source.path}`, '```ts\n' + excerpt(source.content, source.focusLine, 45) + '\n```');
+    add(3, `${T('source')}: ${source.path}`, '```ts\n' + excerpt(source.content, source.focusLine, 45) + '\n```');
 
   if (result?.steps.length)
-    add(4, 'Test steps (report)', renderSteps(result.steps).slice(0, 60).join('\n'));
+    add(4, T('steps'), renderSteps(result.steps).slice(0, 60).join('\n'));
 
   if (trace?.actions.length) {
     const failingIndex = failing ? trace.actions.indexOf(failing) : trace.actions.length - 1;
     const window = trace.actions.slice(Math.max(0, failingIndex - 25), failingIndex + 1);
-    add(4, 'Browser actions before the failure', window.map(a => `- ${a.title}${a.locator ? ` ${a.locator}` : ''}${a.params ? ` (${a.params})` : ''}${a.endTime !== undefined ? ` — ${Math.round(a.endTime - a.startTime)}ms` : ''}${a.error ? ` ✘ ${clip(a.error, 1, 200)}` : ''}`).join('\n'));
+    add(4, T('actions'), window.map(a => `- ${a.title}${a.locator ? ` ${a.locator}` : ''}${a.params ? ` (${a.params})` : ''}${a.endTime !== undefined ? ` — ${Math.round(a.endTime - a.startTime)}ms` : ''}${a.error ? ` ✘ ${clip(a.error, 1, 200)}` : ''}`).join('\n'));
   }
 
   if (trace?.requests.length)
-    add(5, 'Last network requests', trace.requests.slice(-15).map(r => `- ${r.method} ${r.url} → ${r.status || r.failure || '?'}`).join('\n'));
+    add(5, T('requests'), trace.requests.slice(-15).map(r => `- ${r.method} ${r.url} → ${r.status || r.failure || '?'}`).join('\n'));
 
   if (test.results.length > 1)
-    add(4, 'Other attempts', test.results.map((r, i) => `- #${i + 1}: ${r.status}${r.errors[0] ? ` — ${clip(strip(r.errors[0].message), 1, 200)}` : ''}`).join('\n'));
+    add(4, T('attempts'), test.results.map((r, i) => `- #${i + 1}: ${r.status}${r.errors[0] ? ` — ${clip(strip(r.errors[0].message), 1, 200)}` : ''}`).join('\n'));
 
   const h = input.insight?.history;
   if (h && h.totalRuns > 1)
-    add(5, 'History of previous runs', `Failed in ${h.failedRuns} of ${h.totalRuns} runs (old → new: ${h.runs.map(r => r.outcome).join(' ')}).${h.isNewFailure ? ' NEW failure.' : ''}`);
+    add(5, T('history'), `${P('failedIn')} ${h.failedRuns} ${P('of')} ${h.totalRuns} ${P('runs')} (${P('oldNew')}: ${h.runs.map(r => r.outcome).join(' ')}).${h.isNewFailure ? ' ' + P('newFailure') : ''}`);
 
   if (input.rerun) {
     const r = input.rerun;
     const sameError = r.error && result?.errors[0] ? firstLine(r.error) === firstLine(strip(result.errors[0].message)) : undefined;
-    add(1, 'Local re-run of the test (performed by the agent just now)', [
-      `Status: ${r.status}${r.durationMs !== undefined ? ` in ${r.durationMs}ms` : ''}`,
-      r.error ? 'Error:\n```\n' + clip(strip(r.error), 30, 3000) + '\n```' : '',
-      sameError === true ? 'Same error as in the report: the failure reproduces.' : sameError === false ? 'Different error than in the report.' : '',
-      r.status === 'passed' ? 'The test PASSED locally: the original failure is environment / data / timing related, or already fixed.' : '',
-      r.trace?.dom ? 'Page at failure in the re-run:\n' + describeDom(r.trace.dom, r.trace.pageUrls) : '',
-      r.trace?.network.length ? 'Failed requests in the re-run:\n' + r.trace.network.map(n => `- ${n.method} ${n.url} → ${n.status || 'failed'}`).join('\n') : '',
+    add(1, T('rerun'), [
+      `${P('status')}: ${r.status}${r.durationMs !== undefined ? ` ${P('in')} ${r.durationMs}ms` : ''}`,
+      r.error ? `${T('error')}:\n\`\`\`\n` + clip(strip(r.error), 30, 3000) + '\n```' : '',
+      sameError === true ? P('same') : sameError === false ? P('different') : '',
+      r.status === 'passed' ? P('passedLocally') : '',
+      r.trace?.dom ? `${P('rerunPage')}:\n` + describeDom(r.trace.dom, r.trace.pageUrls, lang) : '',
+      r.trace?.network.length ? `${P('rerunNet')}:\n` + r.trace.network.map(n => `- ${n.method} ${n.url} → ${n.status || 'failed'}`).join('\n') : '',
     ].filter(Boolean).join('\n'));
   }
 
   if (input.errorContext && !trace?.dom)
-    add(4, 'Page snapshot (ARIA) and context from the error-context attachment', clip(input.errorContext, 200, 12000));
+    add(4, T('errorContext'), clip(input.errorContext, 200, 12000));
 
   // Fit into the budget: drop lowest-priority sections first, then cut the rest.
   sections.sort((a, b) => a.priority - b.priority);
@@ -164,20 +226,21 @@ export function buildEvidence(input: EvidenceInput, maxChars: number): Evidence 
   }
   let markdown = render(kept);
   if (markdown.length > maxChars) {
-    markdown = markdown.slice(0, maxChars) + '\n…(truncated)';
+    markdown = markdown.slice(0, maxChars) + '\n' + P('truncated');
     truncated = true;
   }
   return { markdown, failingLocator, candidates, truncated };
 }
 
-function describeDom(dom: DomState, urls: string[]): string {
+function describeDom(dom: DomState, urls: string[], lang: Lang): string {
+  const P = (key: PhraseKey) => kPhrases[key][lang];
   const lines = [`URL: ${dom.url}`];
   if (urls.length > 1)
-    lines.push(`Navigation history: ${urls.slice(-5).join(' → ')}`);
+    lines.push(`${P('navigation')}: ${urls.slice(-5).join(' → ')}`);
   if (dom.isBlank)
-    lines.push('**The page body is EMPTY at the moment of failure** (blank page: unexpected navigation, redirect, crash or nothing rendered).');
+    lines.push(P('blank'));
   if (dom.outline)
-    lines.push('DOM outline (tag, key attributes, text):\n```html\n' + clip(dom.outline, 150, 9000) + '\n```');
+    lines.push(`${P('outline')}:\n\`\`\`html\n` + clip(dom.outline, 150, 9000) + '\n```');
   return lines.join('\n');
 }
 
@@ -218,7 +281,8 @@ export function parseLocator(locator: string): LocatorQuery | undefined {
 
 const kImplicitRoles: Record<string, string> = { button: 'button', a: 'link', h1: 'heading', h2: 'heading', h3: 'heading', h4: 'heading', input: 'textbox', select: 'combobox', li: 'listitem', ul: 'list', ol: 'list', table: 'table', tr: 'row', dialog: 'dialog', img: 'img', textarea: 'textbox', nav: 'navigation' };
 
-export function findLocatorCandidates(locator: string, expectedText: string | undefined, elements: DomElement[]): LocatorCandidate[] {
+export function findLocatorCandidates(locator: string, expectedText: string | undefined, elements: DomElement[], lang: Lang = 'ru'): LocatorCandidate[] {
+  const ru = lang === 'ru';
   const query = parseLocator(locator);
   if (!query)
     return [];
@@ -236,32 +300,32 @@ export function findLocatorCandidates(locator: string, expectedText: string | un
       const best = Math.max(0, ...keys.map(k => similarity(wanted, normalize(k))));
       if (best >= 0.45) {
         score += best * 2;
-        reasons.push(`attribute similar to "${query.value}" (${Math.round(best * 100)}%)`);
+        reasons.push(ru ? `атрибут похож на "${query.value}" (${Math.round(best * 100)}%)` : `attribute similar to "${query.value}" (${Math.round(best * 100)}%)`);
       }
     }
     if (query.kind === 'text' || query.kind === 'label' || query.kind === 'role') {
       const s = wanted ? Math.max(similarity(wanted, normalize(name)), normalize(name).includes(wanted) ? 0.9 : 0) : 0;
       if (s >= 0.5) {
         score += s * 2;
-        reasons.push(`text similar to "${query.value}" (${Math.round(s * 100)}%)`);
+        reasons.push(ru ? `текст похож на "${query.value}" (${Math.round(s * 100)}%)` : `text similar to "${query.value}" (${Math.round(s * 100)}%)`);
       }
       if (query.kind === 'role' && role === query.role) {
         score += 0.5;
-        reasons.push(`same role "${role}"`);
+        reasons.push(ru ? `та же роль "${role}"` : `same role "${role}"`);
       }
     }
     if (query.kind === 'placeholder' && e.attrs.placeholder) {
       const s = similarity(wanted, normalize(e.attrs.placeholder));
       if (s >= 0.5) {
         score += s * 2;
-        reasons.push(`placeholder similar (${Math.round(s * 100)}%)`);
+        reasons.push(ru ? `placeholder похож (${Math.round(s * 100)}%)` : `placeholder similar (${Math.round(s * 100)}%)`);
       }
     }
     if (expected && e.text && normalize(e.text).length < 200) {
       const s = similarity(expected, normalize(e.text));
       if (s >= 0.6 || (normalize(e.text).includes(expected.split(' ')[0]) && expected.length > 2)) {
         score += Math.max(s, 0.6);
-        reasons.push(`text "${e.text.slice(0, 40)}" resembles the expected value`);
+        reasons.push(ru ? `текст "${e.text.slice(0, 40)}" похож на ожидаемое значение` : `text "${e.text.slice(0, 40)}" resembles the expected value`);
       }
     }
     if (score > 0)

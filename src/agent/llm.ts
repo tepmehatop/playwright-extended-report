@@ -40,9 +40,14 @@ export type LlmConfig = {
   timeoutMs: number;
   /** Budget for the evidence put into one prompt. */
   maxContextChars: number;
-  /** Answer language, e.g. "Russian". */
+  /** Answer language, e.g. "Russian" (default) or "English". */
   language?: string;
 };
+
+/** Language of everything the agent generates (prompts, evidence, logs): ru unless the answer language is English. */
+export function agentLang(config: LlmConfig): 'ru' | 'en' {
+  return /^en/i.test(config.language || '') ? 'en' : 'ru';
+}
 
 export type ChatMessage = { role: 'system' | 'user' | 'assistant', content: string };
 export type ChatResult = { content: string, model: string, usage?: { prompt_tokens?: number, completion_tokens?: number, total_tokens?: number } };
@@ -75,45 +80,107 @@ export function llmConfigFromEnv(overrides: { mock?: boolean } = {}): LlmConfig 
     temperature: Number(env('EXTENDED_REPORT_AI_TEMPERATURE') || 0.2),
     timeoutMs: Number(env('EXTENDED_REPORT_AI_TIMEOUT_MS') || 180_000),
     maxContextChars: Number(env('EXTENDED_REPORT_AI_MAX_CHARS') || 48_000),
-    language: env('EXTENDED_REPORT_AI_LANGUAGE'),
+    language: env('EXTENDED_REPORT_AI_LANGUAGE') || 'Russian',
   };
 }
 
 export function describeLlm(config: LlmConfig): string {
   if (config.provider === 'mock')
-    return 'mock answers (no model)';
+    return agentLang(config) === 'ru' ? 'шаблонные ответы (модель не подключена)' : 'mock answers (no model)';
   return `${config.provider}${config.model ? ` · ${config.model}` : ''}${config.baseUrl ? ` · ${config.baseUrl}` : ''}`;
 }
 
 export async function chat(config: LlmConfig, messages: ChatMessage[], mockAnswer?: () => string): Promise<ChatResult> {
   if (config.provider === 'mock')
     return { content: mockAnswer ? mockAnswer() : 'Mock answer.', model: 'mock' };
-
-  const { url, headers } = await endpoint(config);
-  const body = JSON.stringify({
-    model: config.model,
-    messages,
-    max_tokens: config.maxTokens,
-    temperature: config.temperature,
-  });
-  let response = await request(url, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body }, config);
-  // GigaChat answers 404 when the model tier is unavailable / out of tokens: retry with the base model.
-  if (config.provider === 'gigachat' && response.status === 404 && config.model !== 'GigaChat')
-    response = await request(url, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ ...JSON.parse(body), model: 'GigaChat' }) }, config);
-  if (response.status === 401 && config.provider === 'gigachat')
-    gigachatToken = undefined;
-  if (response.status < 200 || response.status >= 300)
-    throw new Error(`LLM ${config.provider} HTTP ${response.status}: ${response.text.slice(0, 500)}`);
-  let json: any;
-  try {
-    json = JSON.parse(response.text);
-  } catch {
-    throw new Error(`LLM ${config.provider} returned non-JSON: ${response.text.slice(0, 300)}`);
-  }
+  const json = await completion(config, { messages });
   const content = json?.choices?.[0]?.message?.content;
   if (typeof content !== 'string' || !content.trim())
     throw new Error(`LLM ${config.provider} returned an empty message`);
   return { content: stripThinking(content), model: json.model || config.model || config.provider, usage: json.usage };
+}
+
+export type ToolSchema = { name: string, description: string, parameters: any };
+export type ToolCall = { id?: string, name: string, args: any };
+/** Messages of a tool loop: provider specific shapes are kept opaque. */
+export type LoopMessage = Record<string, any>;
+
+/**
+ * One turn of a tool-calling conversation. OpenAI-compatible providers use `tools`/`tool_calls`;
+ * GigaChat ignores those and needs the legacy `functions`/`function_call` with arguments as a JSON
+ * object in both directions (same as in shmoker-ai's MCP engine).
+ */
+export async function chatWithTools(config: LlmConfig, messages: LoopMessage[], tools: ToolSchema[]): Promise<{ content: string, calls: ToolCall[], assistant: LoopMessage, model: string }> {
+  const gigachat = config.provider === 'gigachat';
+  const payload: Record<string, any> = { messages };
+  if (tools.length) {
+    if (gigachat) {
+      payload.functions = tools.map(t => ({ name: t.name, description: t.description, parameters: t.parameters }));
+      payload.function_call = 'auto';
+    } else {
+      payload.tools = tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
+      payload.tool_choice = 'auto';
+    }
+  }
+  const json = await completion(config, payload);
+  const message = json?.choices?.[0]?.message ?? {};
+  const content = stripThinking(typeof message.content === 'string' ? message.content : '');
+  const calls: ToolCall[] = [];
+  let assistant: LoopMessage;
+  if (gigachat && message.function_call) {
+    let args = message.function_call.arguments;
+    if (typeof args === 'string') {
+      try {
+        args = JSON.parse(args);
+      } catch {
+        args = {};
+      }
+    }
+    calls.push({ name: message.function_call.name, args: args ?? {} });
+    assistant = { role: 'assistant', content: message.content ?? '', function_call: { name: message.function_call.name, arguments: args ?? {} } };
+  } else if (Array.isArray(message.tool_calls) && message.tool_calls.length) {
+    for (const tc of message.tool_calls) {
+      let args: any = tc.function?.arguments;
+      if (typeof args === 'string') {
+        try {
+          args = JSON.parse(args || '{}');
+        } catch {
+          args = {};
+        }
+      }
+      calls.push({ id: tc.id, name: tc.function?.name, args: args ?? {} });
+    }
+    assistant = { role: 'assistant', content: message.content ?? null, tool_calls: message.tool_calls };
+  } else {
+    assistant = { role: 'assistant', content: message.content ?? '' };
+  }
+  return { content, calls, assistant, model: json.model || config.model || config.provider };
+}
+
+/** The message that carries a tool result back to the model, in the provider's shape. */
+export function toolResultMessage(config: LlmConfig, call: ToolCall, result: string): LoopMessage {
+  if (config.provider === 'gigachat')
+    return { role: 'function', name: call.name, content: JSON.stringify({ result }) };
+  return { role: 'tool', tool_call_id: call.id, content: result };
+}
+
+async function completion(config: LlmConfig, payload: Record<string, any>): Promise<any> {
+  const { url, headers } = await endpoint(config);
+  const body = { model: config.model, max_tokens: config.maxTokens, temperature: config.temperature, ...payload };
+  const send = (b: object) => request(url, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(b) }, config);
+  let response = await send(body);
+  // GigaChat answers 404 when the model tier is unavailable / out of tokens: retry with the base model.
+  if (config.provider === 'gigachat' && response.status === 404 && config.model !== 'GigaChat')
+    response = await send({ ...body, model: 'GigaChat' });
+  if (response.status === 401 && config.provider === 'gigachat')
+    gigachatToken = undefined;
+  if (response.status < 200 || response.status >= 300)
+    throw new Error(`LLM ${config.provider} HTTP ${response.status}: ${response.text.slice(0, 500)}`);
+  try {
+    return JSON.parse(response.text);
+  } catch {
+    throw new Error(`LLM ${config.provider} returned non-JSON: ${response.text.slice(0, 300)}`);
+  }
 }
 
 /** qwen3 / deepseek style reasoning blocks are noise for the user. */

@@ -11,6 +11,7 @@ import type { InsightsData, InsightTest } from '../../../../src/shared/insightsF
 import { extendedTabs } from '../extendedTabs';
 import { FixMenu } from '../insights/actions';
 import { AgentPanel } from './agentPanel';
+import { OpenInIdeButton } from '../ide';
 
 type OpenState = { key: string, action: 'analyze' | 'fix' } | undefined;
 
@@ -69,6 +70,7 @@ export const TestPageAgentButtons: React.FC<{ test: TestCase, result: TestResult
   return <>
     <button className='button' data-testid='test-page-ask-ai' aria-pressed={open?.key === key && open.action === 'analyze'} onClick={() => setOpenState(open?.key === key && open.action === 'analyze' ? undefined : { key, action: 'analyze' })}>Ask AI</button>
     <FixMenu test={insight} data={insightsData()} onAgentFix={() => setOpenState({ key, action: 'fix' })} />
+    <OpenInIdeButton file={test.location.file} line={test.location.line} column={test.location.column} />
   </>;
 };
 

@@ -101,11 +101,21 @@ export type RunResult = {
   output: string;
 };
 
+export type TestRef = { file: string, line: number, projectName?: string, title?: string };
+
+/** Runs one test (see runTests). */
+export async function runSingleTest(repo: Repo, test: TestRef, onLog: (line: string) => void, timeoutMs = 5 * 60_000): Promise<RunResult> {
+  const [result] = (await runTests(repo, [test], onLog, timeoutMs)).tests;
+  return result;
+}
+
 /**
- * Runs one test with the repository's own Playwright: no retries, trace on, JSON reporter
+ * Runs tests with the repository's own Playwright: no retries, trace on, JSON reporter
  * (so that the project's reporters, including this one, do not overwrite reports).
+ * One result per requested test, in the same order.
  */
-export async function runSingleTest(repo: Repo, test: { file: string, line: number, projectName?: string }, onLog: (line: string) => void, timeoutMs = 5 * 60_000): Promise<RunResult> {
+export async function runTests(repo: Repo, tests: TestRef[], onLog: (line: string) => void, timeoutMs = 10 * 60_000): Promise<{ tests: RunResult[], output: string }> {
+  const fail = (error: string, output = ''): { tests: RunResult[], output: string } => ({ tests: tests.map(() => ({ status: 'error', error, output })), output });
   let cli: string;
   try {
     cli = require.resolve('@playwright/test/cli', { paths: [repo.dir] });
@@ -113,15 +123,16 @@ export async function runSingleTest(repo: Repo, test: { file: string, line: numb
     try {
       cli = require.resolve('playwright/cli', { paths: [repo.dir] });
     } catch {
-      return { status: 'error', error: `@playwright/test is not installed in ${repo.dir}`, output: '' };
+      return fail(`@playwright/test is not installed in ${repo.dir}`);
     }
   }
   const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-extended-run-'));
   const jsonFile = path.join(outDir, 'result.json');
-  const fileFilter = repo.find(test.file) ?? test.file;
-  const args = [cli, 'test', `${fileFilter}:${test.line}`, '--retries=0', '--trace=on', '--workers=1', '--reporter=json', `--output=${path.join(outDir, 'results')}`];
-  if (test.projectName)
-    args.push(`--project=${test.projectName}`);
+  const filters = tests.map(t => `${repo.find(t.file) ?? t.file}:${t.line}`);
+  const projects = [...new Set(tests.map(t => t.projectName).filter(Boolean))] as string[];
+  const args = [cli, 'test', ...new Set(filters), '--retries=0', '--trace=on', '--workers=1', '--reporter=json', `--output=${path.join(outDir, 'results')}`];
+  for (const project of projects)
+    args.push(`--project=${project}`);
   if (repo.configFile)
     args.push('-c', repo.configFile);
   onLog(`$ npx playwright ${args.slice(1).join(' ')}`);
@@ -150,32 +161,33 @@ export async function runSingleTest(repo: Repo, test: { file: string, line: numb
   try {
     report = JSON.parse(fs.existsSync(jsonFile) ? fs.readFileSync(jsonFile, 'utf-8') : stdout);
   } catch {
-    return { status: 'error', error: `Could not read the run result (exit code ${code}).`, output, durationMs: Date.now() - started };
+    return fail(`Could not read the run result (exit code ${code}).`, output);
   }
-  const results: any[] = [];
+  const specs: { file: string, line: number, projectName: string, result: any }[] = [];
   const visit = (suite: any) => {
     for (const spec of suite.specs || []) {
-      for (const t of spec.tests || []) {
-        if (!test.projectName || t.projectName === test.projectName)
-          results.push(...(t.results || []));
-      }
+      for (const t of spec.tests || [])
+        specs.push({ file: spec.file, line: spec.line, projectName: t.projectName, result: (t.results || [])[t.results.length - 1] });
     }
     for (const child of suite.suites || [])
       visit(child);
   };
   for (const suite of report.suites || [])
     visit(suite);
-  const last = results[results.length - 1];
-  if (!last) {
-    const topError = report.errors?.[0]?.message;
-    return { status: topError ? 'error' : 'not-found', error: topError ?? `No test found at ${fileFilter}:${test.line}`, output, durationMs: Date.now() - started };
-  }
-  const trace = (last.attachments || []).find((a: any) => a.name === 'trace' && a.path);
-  return {
-    status: last.status,
-    error: stripAnsi(last.errors?.map((e: any) => e.message).join('\n\n') || last.error?.message),
-    durationMs: last.duration,
-    tracePath: trace?.path,
-    output,
-  };
+  const topError = report.errors?.[0]?.message;
+  const results: RunResult[] = tests.map((t, i) => {
+    const filter = filters[i].replace(/:\d+$/, '');
+    const spec = specs.find(s => s.line === t.line && (filter.endsWith(s.file) || s.file.endsWith(path.basename(filter))) && (!t.projectName || s.projectName === t.projectName));
+    if (!spec?.result)
+      return { status: topError ? 'error' : 'not-found', error: stripAnsi(topError) ?? `No test found at ${filters[i]}`, output, durationMs: Date.now() - started };
+    const trace = (spec.result.attachments || []).find((a: any) => a.name === 'trace' && a.path);
+    return {
+      status: spec.result.status,
+      error: stripAnsi(spec.result.errors?.map((e: any) => e.message).join('\n\n') || spec.result.error?.message),
+      durationMs: spec.result.duration,
+      tracePath: trace?.path,
+      output,
+    };
+  });
+  return { tests: results, output };
 }

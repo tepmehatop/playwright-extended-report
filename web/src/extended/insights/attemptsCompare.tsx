@@ -6,6 +6,7 @@ import { statusIcon } from '../../statusIcon';
 import { formatUrl } from '../../utils';
 import type { LoadedReport } from '../../loadedReport';
 import type { TestCase, TestFile, TestResult, TestStep } from '../../types';
+import { texts } from '../i18n';
 
 /** Loads full test data (results, steps, attachments) from the report zip. */
 export function useTestCase(report: LoadedReport | undefined, testId: string): TestCase | undefined | 'not-found' {
@@ -47,10 +48,11 @@ function flattenSteps(steps: TestStep[], depth = 0, out: FlatStep[] = []): FlatS
  */
 export const AttemptsCompare: React.FC<{ testId: string, report: LoadedReport | undefined }> = ({ testId, report }) => {
   const test = useTestCase(report, testId);
+  const t = texts();
   if (!test)
-    return <div className='insights-note'>Loading…</div>;
+    return <div className='insights-note'>{t.loading}</div>;
   if (test === 'not-found' || test.results.length < 2)
-    return <div className='insights-note'>Only one attempt was recorded for this test.</div>;
+    return <div className='insights-note'>{t.oneAttempt}</div>;
 
   const failedIndex = test.results.map((r, i) => ({ r, i })).filter(e => e.r.status !== 'passed' && e.r.status !== 'skipped').map(e => e.i).pop() ?? 0;
   const passedIndex = test.results.findIndex(r => r.status === 'passed');
@@ -64,8 +66,8 @@ export const AttemptsCompare: React.FC<{ testId: string, report: LoadedReport | 
   return <div className='attempts-compare' data-testid='attempts-compare'>
     <div className='attempts-summary'>
       {passedIndex !== -1
-        ? <>Attempt #{failedIndex + 1} failed, attempt #{passedIndex + 1} passed. {divergence !== -1 ? `They diverge at step ${divergence + 1}: "${leftSteps[divergence]?.title ?? rightSteps[divergence]?.title}".` : 'Steps are identical; compare timings and screenshots.'}</>
-        : <>All attempts failed. {sameErrors(left, right) ? 'With the same error: a stable failure, not flakiness.' : 'With different errors: look for unstable steps.'}</>}
+        ? <>{t.attemptFailedPassed(failedIndex + 1, passedIndex + 1)} {divergence !== -1 ? t.divergeAt(divergence + 1, leftSteps[divergence]?.title ?? rightSteps[divergence]?.title) : t.sameSteps}</>
+        : <>{t.allFailed} {sameErrors(left, right) ? t.sameError : t.differentErrors}</>}
     </div>
     <div className='attempts-columns'>
       <AttemptColumn test={test} result={left} index={failedIndex} steps={leftSteps} other={rightSteps} divergence={divergence} />
@@ -79,7 +81,7 @@ const AttemptColumn: React.FC<{ test: TestCase, result: TestResult, index: numbe
   return <div className='attempt-column'>
     <div className='attempt-header'>
       {statusIcon(result.status)}
-      <a href={`#?testId=${encodeURIComponent(test.testId)}&run=${index}`}>Attempt #{index + 1}</a>
+      <a href={`#?testId=${encodeURIComponent(test.testId)}&run=${index}`}>{texts().attempt(index + 1)}</a>
       <span className='muted'>{result.status} · {msToString(result.duration)}</span>
     </div>
     {result.errors.length > 0 && <pre className='attempt-error'>{stripAnsiEscapes(result.errors[0].message).split('\n').slice(0, 6).join('\n')}</pre>}

@@ -233,3 +233,41 @@
 .extended-section-placeholder {
   color: var(--color-fg-muted);
 }
+
+.ide-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  max-width: 340px;
+}
+
+.ide-settings input,
+.ide-settings select {
+  font: inherit;
+  min-width: 0;
+}
+
+.open-in-ide {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.open-in-ide-message {
+  font-size: 12px;
+  color: var(--color-fg-muted);
+}
+
+.link-button {
+  padding: 0;
+  font: inherit;
+  color: var(--color-accent-fg);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}

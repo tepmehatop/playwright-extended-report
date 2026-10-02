@@ -25,6 +25,7 @@
   "files": [
     "dist",
     "docs/*.md",
+    "docs/examples",
     "README.md",
     "LICENSE",
     "NOTICE"

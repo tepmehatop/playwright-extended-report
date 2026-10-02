@@ -166,24 +166,27 @@ export function clusterFailures(failed: FailedTestInfo[]): FailureCluster[] {
 
 export type RunStats = { total: number, expected: number, unexpected: number, flaky: number, skipped: number };
 
-export function renderClustersMarkdown(clusters: FailureCluster[], stats: RunStats): string {
+export function renderClustersMarkdown(clusters: FailureCluster[], stats: RunStats, lang: 'ru' | 'en' = 'ru'): string {
+  const ru = lang === 'ru';
   const executed = stats.total - stats.skipped;
   const percent = (n: number) => executed ? `${(n * 100 / executed).toFixed(1)}%` : '0%';
   const lines: string[] = [];
-  lines.push(`| Total | Passed | Failed | Flaky | Skipped | Failure rate |`);
+  lines.push(ru ? `| Всего | Прошло | Упало | Flaky | Пропущено | Доля падений |` : `| Total | Passed | Failed | Flaky | Skipped | Failure rate |`);
   lines.push(`|---|---|---|---|---|---|`);
   lines.push(`| ${stats.total} | ${stats.expected} | ${stats.unexpected} | ${stats.flaky} | ${stats.skipped} | **${percent(stats.unexpected)}** |`);
   lines.push('');
 
   if (!clusters.length) {
-    lines.push('No failed or flaky tests in this run.');
+    lines.push(ru ? 'В этом прогоне нет упавших и нестабильных тестов.' : 'No failed or flaky tests in this run.');
     return lines.join('\n');
   }
 
   const failedCount = clusters.reduce((a, c) => a + c.tests.length, 0);
-  lines.push(`**${failedCount}** failed / flaky tests grouped into **${clusters.length}** distinct error(s). Groups are sorted by size: fixing the top one fixes the most tests.`);
+  lines.push(ru
+    ? `**${failedCount}** упавших / нестабильных тестов сгруппированы в **${clusters.length}** разных ошибок. Группы отсортированы по размеру: исправление верхней чинит больше всего тестов.`
+    : `**${failedCount}** failed / flaky tests grouped into **${clusters.length}** distinct error(s). Groups are sorted by size: fixing the top one fixes the most tests.`);
   lines.push('');
-  lines.push(`| # | Category | Error | Tests | Projects |`);
+  lines.push(ru ? `| # | Категория | Ошибка | Тестов | Проекты |` : `| # | Category | Error | Tests | Projects |`);
   lines.push(`|---|---|---|---|---|`);
   for (const c of clusters)
     lines.push(`| [${c.id}](#group-${c.id}) | ${c.category} | ${inlineCode(errorTitle(c.sampleError), 120)} | ${c.tests.length} | ${c.projects.join(', ') || '—'} |`);
@@ -192,12 +195,14 @@ export function renderClustersMarkdown(clusters: FailureCluster[], stats: RunSta
   for (const c of clusters) {
     lines.push(`<h3 id="group-${c.id}">${c.id}. ${escapeHtml(errorTitle(c.sampleError).slice(0, 160))}</h3>`);
     lines.push('');
-    const meta = [`**${c.category}**`, `${c.tests.length} test(s)`];
+    const meta = [`**${c.category}**`, ru ? `тестов: ${c.tests.length}` : `${c.tests.length} test(s)`];
     if (c.topLocation)
-      meta.push(`thrown at ${inlineCode(c.topLocation, 200)}`);
+      meta.push(`${ru ? 'место ошибки' : 'thrown at'} ${inlineCode(c.topLocation, 200)}`);
     lines.push(meta.join(' · '));
     lines.push('');
-    lines.push('<details><summary>Error</summary>');
+    lines.push(`[${ru ? 'Разобрать группу с AI-агентом →' : 'Analyze the group with the AI agent →'}](#?tab=insights&group=${c.id})`);
+    lines.push('');
+    lines.push(`<details><summary>${ru ? 'Ошибка' : 'Error'}</summary>`);
     lines.push('');
     lines.push('```text');
     lines.push(truncateLines(c.sampleError, 40).replace(/```/g, '\'\'\''));

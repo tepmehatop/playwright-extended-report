@@ -1,0 +1,9 @@
+node_modules
+dist
+tests/.output*
+test-results
+example/extended-report
+example/playwright-report
+example/test-results
+*.tgz
+.git

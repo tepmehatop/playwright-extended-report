@@ -51,6 +51,8 @@ export type DomElement = {
 
 export type DomState = {
   url: string;
+  /** Static HTML of the page at failure (scripts and event handlers removed), for the locator lab. */
+  html: string;
   /** Compact outline, one element per line. */
   outline: string;
   elements: DomElement[];
@@ -58,7 +60,21 @@ export type DomState = {
   snapshotName: string;
 };
 
-export type TraceRequest = { method: string, url: string, status: number, durationMs?: number, failure?: string };
+export type TraceRequest = {
+  method: string;
+  url: string;
+  status: number;
+  statusText?: string;
+  durationMs?: number;
+  failure?: string;
+  requestHeaders?: { name: string, value: string }[];
+  requestBody?: string;
+  responseMimeType?: string;
+  responseBody?: string;
+  /** Path of the response body inside the trace zip (resources/<sha1>[.ext]). */
+  responseSha1?: string;
+  startedAt?: string;
+};
 
 export type TraceData = {
   actions: TraceAction[];
@@ -74,6 +90,8 @@ export type TraceData = {
   /** Absolute paths seen in stacks, test file first. */
   sourcePaths: string[];
   pageUrls: string[];
+  /** Full details (headers, bodies) of requests that failed (4xx/5xx or network error). */
+  failedRequests: TraceRequest[];
 };
 
 const ansi = /\u001b\[[0-9;]*m/g;
@@ -85,7 +103,8 @@ export function sha1(text: string): string {
 
 export async function readTrace(zipPathOrBuffer: string | Buffer): Promise<TraceData> {
   const entries = await readZip(zipPathOrBuffer, name => /\.(trace|network)$/.test(name) || name.startsWith('src/'));
-  const data: TraceData = { actions: [], steps: [], testErrors: [], network: [], requests: [], console: [], sources: new Map(), sourcePaths: [], pageUrls: [] };
+  const failedRequests: TraceRequest[] = [];
+  const data: TraceData = { actions: [], steps: [], testErrors: [], network: [], requests: [], console: [], sources: new Map(), sourcePaths: [], pageUrls: [], failedRequests: [] };
   const actionsById = new Map<string, TraceAction>();
   const snapshotsByFrame = new Map<string, any[]>();
   const snapshotOrder: { frameId: string, index: number, snapshot: any }[] = [];
@@ -161,12 +180,29 @@ export async function readTrace(zipPathOrBuffer: string | Buffer): Promise<Trace
           if (!url || url.startsWith('data:'))
             break;
           const status = Number(entry?.response?.status ?? 0);
-          const request: TraceRequest = { method: entry?.request?.method ?? 'GET', url, status: status > 0 ? status : 0, durationMs: typeof entry?.time === 'number' ? Math.round(entry.time) : undefined, failure: entry?._failureText };
+          const request: TraceRequest = {
+            method: entry?.request?.method ?? 'GET',
+            url,
+            status: status > 0 ? status : 0,
+            statusText: entry?.response?.statusText || undefined,
+            durationMs: typeof entry?.time === 'number' ? Math.round(entry.time) : undefined,
+            failure: entry?._failureText,
+            startedAt: entry?.startedDateTime,
+          };
           data.requests.push(request);
           const key = `${request.method}|${url}|${status}`;
           if ((status >= 400 || request.failure) && !seenNet.has(key)) {
             seenNet.add(key);
-            data.network.push({ method: request.method, url, status: request.status, statusText: entry?.response?.statusText || undefined, failure: request.failure, durationMs: request.durationMs });
+            request.requestHeaders = (entry?.request?.headers ?? []).filter((h: any) => h?.name && !h.name.startsWith(':')).map((h: any) => ({ name: String(h.name), value: String(h.value ?? '') }));
+            const postData = entry?.request?.postData;
+            if (postData?.text)
+              request.requestBody = String(postData.text).slice(0, 8000);
+            request.responseMimeType = entry?.response?.content?.mimeType;
+            // Newer traces: content._file = 'resources/<sha1>.<ext>'; older: content._sha1.
+            const content = entry?.response?.content;
+            request.responseSha1 = content?._file ?? (content?._sha1 ? `resources/${content._sha1}` : undefined);
+            failedRequests.push(request);
+            data.network.push({ method: request.method, url, status: request.status, statusText: request.statusText, failure: request.failure, durationMs: request.durationMs });
           }
           break;
         }
@@ -187,6 +223,18 @@ export async function readTrace(zipPathOrBuffer: string | Buffer): Promise<Trace
       }
     }
   }
+
+  // Second pass: bodies of failed responses (small text only), e.g. {"error":"Internal Server Error"}.
+  const wanted = new Set(failedRequests.map(r => r.responseSha1).filter(Boolean) as string[]);
+  if (wanted.size) {
+    const bodies = await readZip(zipPathOrBuffer, name => wanted.has(name), 64 * 1024).catch(() => new Map<string, string>());
+    for (const r of failedRequests) {
+      const body = r.responseSha1 ? bodies.get(r.responseSha1) : undefined;
+      if (body !== undefined && /json|text|xml|html|javascript/i.test(r.responseMimeType || 'text'))
+        r.responseBody = body.slice(0, 8000);
+    }
+  }
+  data.failedRequests = failedRequests;
 
   data.actions.sort((a, b) => a.startTime - b.startTime);
   data.failingAction = [...data.actions].reverse().find(a => a.error) ?? [...data.actions].reverse().find(a => a.endTime === undefined && a.method !== 'close');
@@ -361,17 +409,69 @@ function buildDom(snapshots: any[], index: number): DomState {
   };
   const snapshot = snapshots[index];
   visit(snapshot.html, index, 0);
+  const html = renderHtml(snapshots, index, resolve);
 
   const body = elements.find(e => e.tag === 'body');
   const bodyChildren = body ? elements.filter(e => e.depth > body.depth) : [];
   const isBlank = !bodyChildren.some(e => e.text || Object.keys(e.attrs).length);
   return {
     url: snapshot.frameUrl,
+    html,
     elements,
     outline: renderOutline(elements),
     isBlank,
     snapshotName: `${snapshot.phase || snapshot.snapshotName || ''}@${snapshot.callId || ''}`,
   };
+}
+
+const kVoidTags = new Set(['AREA', 'BASE', 'BR', 'COL', 'EMBED', 'HR', 'IMG', 'INPUT', 'LINK', 'META', 'SOURCE', 'TRACK', 'WBR']);
+const escapeText = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const escapeAttr = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+
+/** Static HTML of a snapshot, like Playwright's SnapshotRenderer but without scripts, handlers and frames. */
+function renderHtml(snapshots: any[], index: number, resolve: (n: NodeSnapshot, i: number) => { node: NodeSnapshot, index: number } | undefined): string {
+  const out: string[] = [];
+  const visit = (n: NodeSnapshot, snapshotIndex: number, parentTag: string) => {
+    const r = resolve(n, snapshotIndex);
+    if (!r)
+      return;
+    if (typeof r.node === 'string') {
+      out.push(parentTag === 'STYLE' ? r.node : escapeText(r.node));
+      return;
+    }
+    if (!isElement(r.node))
+      return;
+    const [tag, attrs, ...children] = r.node;
+    const upper = String(tag).toUpperCase();
+    if (upper === 'SCRIPT' || upper === 'NOSCRIPT' || upper === 'BASE' || upper === 'IFRAME' || upper === 'FRAME' || upper === 'TEMPLATE' || upper === 'LINK')
+      return;
+    const parts: string[] = [];
+    for (const [name, value] of Object.entries(attrs ?? {})) {
+      if (name === '__playwright_value_') {
+        if (upper !== 'TEXTAREA')
+          parts.push(`value="${escapeAttr(String(value))}"`);
+        continue;
+      }
+      if (name === '__playwright_checked_' && value === 'true')
+        parts.push('checked');
+      if (name === '__playwright_selected_' && value === 'true')
+        parts.push('selected');
+      if (name.startsWith('__playwright') || /^on/i.test(name) || /^(src|srcset|href)$/i.test(name) && /^\s*javascript:/i.test(String(value)))
+        continue;
+      parts.push(`${name}="${escapeAttr(String(value))}"`);
+    }
+    out.push(`<${tag}${parts.length ? ' ' + parts.join(' ') : ''}>`);
+    if (kVoidTags.has(upper))
+      return;
+    if (upper === 'TEXTAREA' && attrs?.__playwright_value_ !== undefined)
+      out.push(escapeText(String(attrs.__playwright_value_)));
+    else
+      for (const child of children)
+        visit(child, r.index, upper);
+    out.push(`</${tag}>`);
+  };
+  visit(snapshots[index].html, index, '');
+  return '<!DOCTYPE html>' + out.join('');
 }
 
 function renderOutline(elements: DomElement[]): string {
@@ -388,7 +488,7 @@ function renderOutline(elements: DomElement[]): string {
 
 // ---------- zip ----------
 
-function readZip(source: string | Buffer, filter: (name: string) => boolean): Promise<Map<string, string>> {
+export function readZip(source: string | Buffer, filter: (name: string) => boolean, maxEntryBytes = 80 * 1024 * 1024): Promise<Map<string, string>> {
   return new Promise((resolve, reject) => {
     const entries = new Map<string, string>();
     const onZip = (error: Error | null, zip?: yauzl.ZipFile) => {
@@ -397,7 +497,7 @@ function readZip(source: string | Buffer, filter: (name: string) => boolean): Pr
       zip.on('error', reject);
       zip.on('end', () => resolve(entries));
       zip.on('entry', (entry: yauzl.Entry) => {
-        if (!filter(entry.fileName) || entry.uncompressedSize > 80 * 1024 * 1024) {
+        if (!filter(entry.fileName) || entry.uncompressedSize > maxEntryBytes) {
           zip.readEntry();
           return;
         }

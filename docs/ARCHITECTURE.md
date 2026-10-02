@@ -86,3 +86,20 @@ test run ───► │  html.ts (порт штатного)  ──►  index
 Патч сломается при первом же обновлении Playwright. Здесь UI и репортёр — собственный код
 со своим форматом данных. От Playwright нужен только публичный Reporter API, а он стабилен
 между версиями. Новые возможности UI переносятся осознанно через [UPSTREAM_SYNC.md](UPSTREAM_SYNC.md).
+
+## AI-агент
+
+Агент — Node-код в `src/agent/`, запускается командами CLI (`agent`, `show --ai`, `ai-gateway`, `analyze`);
+в отчёте только UI (`web/src/extended/agent`, `insights`). Подробно — [AGENT.md](AGENT.md), [DEPLOYMENT.md](DEPLOYMENT.md).
+
+| Модуль | Что делает |
+|---|---|
+| `trace.ts` | Разбор `trace.zip`: действия и лог ожидания, упавшее действие, шаги, сеть (с телами), консоль, DOM в момент падения (восстановление снапшотов со ссылками), исходники из `src/`. |
+| `evidence.ts` | Пакет доказательств для модели (приоритеты секций, бюджет `EXTENDED_REPORT_AI_MAX_CHARS`), поиск похожих элементов. |
+| `locatorLab.ts` | Безопасный разбор цепочек локаторов, проверка на HTML страницы в момент падения в headless Chromium. |
+| `llm.ts` | Провайдеры: OpenAI-compatible (proxy), GigaChat (OAuth, `functions`), GigaCode IFT SSL (mTLS), GigaCode CLI. |
+| `mcp.ts` | Собственный MCP-клиент (stdio / Streamable HTTP / SSE), конфиг `mcpServers`, allowlist инструментов. |
+| `toolLoop.ts` | MCP-путь: цикл вызовов инструментов; при сбое — простой путь в `service.ts`. |
+| `edits.ts`, `repo.ts` | Правки SEARCH/REPLACE, дифф, поиск файлов в репозитории, запуск тестов (JSON-репортёр). |
+| `service.ts` | HTTP API и задачи: analyze / debug / fix / apply / revert / lab, группы, Open in IDE. |
+| `batch.ts` | `analyze` в CI: разбор групп и запись результатов в отчёт. |

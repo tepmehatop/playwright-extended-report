@@ -1,0 +1,30 @@
+# Agent backend on the Jenkins VM.
+#   cp docker/.env.example docker/.env   # fill in the model settings
+#   docker compose -f docker/docker-compose.yml up -d --build
+services:
+  pw-agent:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        PLAYWRIGHT_VERSION: "1.63.0"
+        WITH_PLAYWRIGHT_MCP: "1"
+        WITH_SERENA: "0"
+        WITH_CODE_INDEX: "0"
+        WITH_CONTEXT7: "0"
+        # NPM_REGISTRY: https://nexus.example.local/repository/npm-group/
+        # PIP_INDEX_URL: https://nexus.example.local/repository/pypi-group/simple
+    image: pw-agent:latest
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    env_file: .env
+    # volumes:
+      # MCP servers: cp docker/mcp.json.example docker/mcp.json, edit, then uncomment
+      # (without it the image's docker/mcp.docker.json is used: Playwright MCP only).
+      # - ./mcp.json:/config/mcp.json:ro
+      # A checkout of the tests repository (optional): sources for the analysis, ${REPO} for serena / code-index.
+      # E.g. a directory the pipeline updates with `git pull`, or the Jenkins workspace (read only).
+      # - /var/lib/jenkins/workspace/autotests:/workspace:ro
+      # Optional prebuilt codebase-memory-mcp binary
+      # - /opt/codebase-memory-mcp:/opt/mcp/codebase-memory-mcp:ro

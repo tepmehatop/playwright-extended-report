@@ -27,6 +27,7 @@ import { linkifyText } from '@web/renderUtils';
 import { Dialog } from '@web/shared/dialog';
 import { kThemeOptions, type Theme, useThemeSetting } from '@web/theme';
 import { ExtendedTabsNav, kTabParam } from './extended/extendedTabView'; // [extended-report]
+import { IdeSettingsView } from './extended/ide'; // [extended-report]
 
 export const HeaderView: React.FC<{
   title: string | undefined,
@@ -167,6 +168,7 @@ const SettingsButton: React.FC = () => {
           ))}
         </select>
       </label>
+      <IdeSettingsView /> {/* [extended-report] */}
     </Dialog>
   </>;
 };

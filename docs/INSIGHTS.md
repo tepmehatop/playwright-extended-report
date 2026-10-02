@@ -1,21 +1,17 @@
 # Вкладка Insights
 
-Создаётся автоматически при каждом прогоне (`insights: true` по умолчанию). Для каждого упавшего
-или flaky теста показывает карточку:
+Создаётся автоматически при каждом прогоне (`insights: true` по умолчанию). Тексты (причины, подсказки, промпты) —
+на русском (`language: 'en'` в репортёре — английский).
 
-```
-✕ app › cart items are loaded from api  [chromium]                      [Environment]
-  app.spec.ts:36 · 2 attempts · ■■■■■ failing 5 runs in a row
-  Backend returned 500 for GET /api/cart; the UI could not get its data.
-   • GET /api/cart → 500
-  FAILED NETWORK REQUESTS   500 GET http://demo.local/api/cart  Internal Server Error  9ms
-  BROWSER ERRORS            error Failed to load cart: HTTP 500
-  ▸ Error
-  [Compare attempts] [Ask AI] [Fix ▾] [Open test]
-```
+Два вида (переключатель вверху):
 
-Сверху — фильтры по типу падения и «New in this run». Ниже — история прогонов: столбики по билдам,
-нестабильные тесты, регрессии длительности, «починилось с прошлого прогона».
+- **По тестам** — карточка на каждый упавший / нестабильный тест: тип падения и объяснение, упавшие запросы (с cURL,
+  баг-репортом и телом ответа), ошибки браузера, ссылка на группу, кнопки «Сравнить попытки», **Ask AI**, **Fix ▾**,
+  **Открыть в IDE**, «Открыть тест». Фильтры по типу падения.
+- **По группам ошибок** — те же группы, что в «Автоматической группировке» Failure analysis: тесты группы,
+  **Разобрать группу** и **Исправить группу** (один запрос к модели и одна правка на все тесты группы, проверка
+  прогоном всех). Сюда же ведёт ссылка «Разобрать группу с AI-агентом →» из Failure analysis (`#?tab=insights&group=N`).
+  Если в CI выполнен `pw-extended-report analyze`, разбор группы уже лежит в карточке.
 
 ## 1. Классификация
 
@@ -91,35 +87,34 @@ withEnv(['EXTENDED_REPORT_HISTORY_FILE=/var/lib/qa-history/regression.json']) { 
 
 ## 4. Сеть и консоль из трейса
 
-Для упавшей попытки читается её `trace.zip`: запросы со статусом ≥ 400 или сетевым сбоем, `console.error`
-и `console.warning`, необработанные исключения страницы. Нужен `trace: 'on'` или `'retain-on-failure'` /
-`'on-first-retry'` в конфиге. Отключить: `insights: { traces: false }`.
+Для упавшей попытки читается её `trace.zip`: запросы со статусом ≥ 400 или сетевым сбоем (с заголовками, телом запроса
+и **телом ответа**), `console.error` / `console.warning`, необработанные исключения страницы. Нужен `trace: 'on'`
+или `'retain-on-failure'` / `'on-first-retry'`. Отключить: `insights: { traces: false }`.
 
-## 6. Ask AI и Fix
+У каждого упавшего запроса:
+- **cURL** — готовая команда для воспроизведения (секретные заголовки `Authorization`, `Cookie`, `*token*`, `*secret*`…
+  заменены на `***`; `EXTENDED_REPORT_UNMASK_SECRETS=1` при генерации отчёта — не маскировать);
+- **Баг-репорт** — Markdown для Jira / команды бэкенда: метод, URL, статус, время, тест, cURL, тела запроса и ответа;
+- **Тело ответа** — раскрывается прямо в карточке (например `{"error":"Internal Server Error"}`).
 
-Это AI-агент: глубокий анализ по трейсу, локальный перезапуск, предложение правки с диффом, применение
-с проверкой и откат, а также поле «подсказка агенту». Кнопки есть в карточках Insights и на странице
-каждого упавшего теста. Подробности и подключение внутренних моделей (Proxy LLM, GigaChat, GigaCode IFT SSL,
-GigaCode CLI) описаны в **[AGENT.md](AGENT.md)**.
+## 5. Ask AI, Fix и Открыть в IDE
 
-Коротко:
+AI-агент: глубокий анализ по трейсу и DOM (сначала с MCP-инструментами, при сбое — простой путь), Locator lab,
+«Запустить и отладить», «Предложить фикс» с диффом и проверкой локаторов, «Применить и проверить», «Откатить»,
+поле «Подсказка агенту». Кнопки есть в карточках, в группах и на странице каждого упавшего теста.
+Подробно — **[AGENT.md](AGENT.md)**, развёртывание — **[DEPLOYMENT.md](DEPLOYMENT.md)**.
 
-```bash
-cd my-autotests
-export EXTENDED_REPORT_AI_PROVIDER=gigachat GIGACHAT_AUTHORIZATION_KEY=... EXTENDED_REPORT_AI_LANGUAGE=Russian
-npx pw-extended-report agent ./extended-report
-```
-
-Без агента кнопка Ask AI показывает готовый промпт с кнопкой **Copy prompt**.
+Без агента Ask AI показывает разбор из CI (если есть) и готовый промпт с кнопкой «Копировать промпт».
 
 **Fix ▾**:
-- **Propose fix with AI agent** — правка с диффом, затем Apply & verify и Revert (см. AGENT.md).
-- **Copy fix prompt** — готовый промпт для любого LLM-чата или IDE-агента. Запрещает ослаблять проверки,
-  если это баг продукта или окружения.
-- **Copy rerun command** — `npx playwright test "file:line" --project=… --retries=0 --trace=on`.
-- **Run fix job ↗** — если задан `insights.fixUrlTemplate` / `EXTENDED_REPORT_FIX_URL`, например
-  `https://jenkins/job/heal-test/buildWithParameters?TEST={file}:{line}&PROJECT={project}`.
-  Подстановки: `{file} {line} {title} {project} {testId}`.
+- **Предложить фикс через AI-агента** — дифф, Locator lab для новых локаторов, затем «Применить и проверить» / «Откатить».
+- **Копировать промпт для фикса** — для любого LLM-чата или IDE-агента; запрещает ослаблять проверки при баге продукта / окружения.
+- **Копировать команду перезапуска** — `npx playwright test "file:line" --project=… --retries=0 --trace=on`.
+- **Запустить джобу фикса ↗** — если задан `insights.fixUrlTemplate` / `EXTENDED_REPORT_FIX_URL`, например
+  `https://jenkins/job/heal-test/buildWithParameters?TEST={file}:{line}&PROJECT={project}`
+  (подстановки `{file} {line} {title} {project} {testId}`).
+
+**Открыть в IDE** — IDE выбирается в ⚙ отчёта, см. [AGENT.md](AGENT.md#открыть-в-ide).
 
 ## Данные
 

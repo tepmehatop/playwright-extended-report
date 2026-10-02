@@ -76,7 +76,9 @@ export type ExtendedReporterOptions = {
   mergeFiles?: boolean;
   /** Extra tabs to embed at generation time. Files that do not exist yet can be marked `optional`. */
   tabs?: ExtendedTabInput[];
-  /** Built-in "Failures" tab with failed tests grouped by error. Default: true. */
+  /** Language of generated texts (analysis, classification, prompts). Default: "ru". Env: EXTENDED_REPORT_LANGUAGE. */
+  language?: 'ru' | 'en';
+  /** Built-in "Failure analysis" tab with failed tests grouped by error. Default: true. */
   failureClusters?: boolean | {
     title?: string;
     order?: number;
@@ -227,6 +229,7 @@ class ExtendedHtmlReporter implements api.Reporter {
   // [extended-report]
   private async _buildExtras(result: api.FullResult): Promise<{ tabs: ExtendedTab[], summary?: ReportSummary }> {
     const tabs: ExtendedTab[] = [];
+    const lang: 'ru' | 'en' = /^en/i.test(process.env.EXTENDED_REPORT_LANGUAGE || this._options.language || 'ru') ? 'en' : 'ru';
     const failed = collectFailedTests(this.config, this.suite, this.config.rootDir);
     const clusters = clusterFailures(failed);
     const stats = emptyStats();
@@ -249,13 +252,13 @@ class ExtendedHtmlReporter implements api.Reporter {
       const failedCount = stats.unexpected + stats.flaky;
       const sections: ExtendedTabSection[] = [{
         id: 'auto',
-        title: 'Automatic error grouping',
-        description: 'Built-in, no AI: failed and flaky tests grouped by normalized error message.',
+        title: lang === 'ru' ? 'Автоматическая группировка ошибок' : 'Automatic error grouping',
+        description: lang === 'ru' ? 'Встроена в отчёт, без AI: упавшие и нестабильные тесты сгруппированы по нормализованной ошибке.' : 'Built-in, no AI: failed and flaky tests grouped by normalized error message.',
         format: 'markdown',
         order: 100,
         source: 'playwright-extended-report',
         generatedAt: new Date().toISOString(),
-        content: renderClustersMarkdown(clusters, stats),
+        content: renderClustersMarkdown(clusters, stats, lang),
       }];
       for (const input of o.sections || []) {
         try {
@@ -276,13 +279,15 @@ class ExtendedHtmlReporter implements api.Reporter {
         badgeKind: stats.unexpected ? 'danger' : 'attention',
         generatedAt: new Date().toISOString(),
         source: 'playwright-extended-report',
-        content: o.description ?? kFailureAnalysisIntro,
+        content: o.description ?? kFailureAnalysisIntro[lang],
         sections,
         placeholders: [{
           sectionId: kSkillSectionId,
-          title: 'Skill analysis',
+          title: lang === 'ru' ? 'Анализ скилла' : 'Skill analysis',
           order: 10,
-          markdown: 'The analysis from your log-analysis skill / LLM has not been added to this report yet. Add it after the run:\n\n```bash\nnpx pw-extended-report add-analysis extended-report --file analysis.md\n```',
+          markdown: lang === 'ru'
+            ? 'Анализ от вашего скилла / LLM ещё не добавлен в этот отчёт. Добавьте его после прогона:\n\n```bash\nnpx pw-extended-report add-analysis extended-report --file analysis.md\n```'
+            : 'The analysis from your log-analysis skill / LLM has not been added to this report yet. Add it after the run:\n\n```bash\nnpx pw-extended-report add-analysis extended-report --file analysis.md\n```',
         }],
       });
     }
@@ -317,6 +322,9 @@ class ExtendedHtmlReporter implements api.Reporter {
           traces: o.traces ?? true,
           aiEndpoint: process.env.EXTENDED_REPORT_AI_ENDPOINT || o.aiEndpoint,
           fixUrlTemplate: process.env.EXTENDED_REPORT_FIX_URL || o.fixUrlTemplate,
+          lang,
+          clusters: clusters.map(c => ({ id: c.id, title: errorTitle(c.sampleError), category: c.category, signature: c.signature, sampleError: c.sampleError.slice(0, 2000), testIds: c.tests.map(t => t.testId), topLocation: c.topLocation })),
+          rootDirInRepo: rootDirInRepo(this.config.rootDir),
         });
         insights = built.data;
         if (built.history)
@@ -330,7 +338,7 @@ class ExtendedHtmlReporter implements api.Reporter {
           order: o.order ?? 50,
           badge: failing || undefined,
           badgeKind: insights.tests.some(t => t.outcome === 'unexpected') ? 'danger' : 'attention',
-          description: 'Failure classification, history, network and console errors, retry comparison, Ask AI / Fix.',
+          description: lang === 'ru' ? 'Классификация падений, сеть и консоль из трейсов, сравнение попыток, история, AI-агент (Ask AI / Fix).' : 'Failure classification, history, network and console errors, retry comparison, Ask AI / Fix.',
           generatedAt: insights.generatedAt,
           source: 'playwright-extended-report',
           content: JSON.stringify(insights),
@@ -376,14 +384,24 @@ class ExtendedHtmlReporter implements api.Reporter {
   }
 }
 
-const kFailureAnalysisIntro = [
-  'One place for everything known about the failures of this run:',
-  '',
-  '1. **Skill analysis** — the output of your log-analysis skill / LLM (repeated errors across tests, root causes, recommendations), added after the run with `pw-extended-report add-analysis`.',
-  '2. **Automatic error grouping** — built into the report, no AI: failed and flaky tests grouped by normalized error message, with failure rate and the line that throws most often.',
-  '',
-  'Per-test classification, network / console errors from traces and the AI agent are in the **Insights** tab.',
-].join('\n');
+const kFailureAnalysisIntro = {
+  ru: [
+    'Всё, что известно о падениях этого прогона, в одном месте:',
+    '',
+    '1. **Анализ скилла** — результат вашего скилла анализа логов / LLM (повторяющиеся ошибки в разных тестах, причины, рекомендации). Добавляется после прогона командой `pw-extended-report add-analysis`.',
+    '2. **Автоматическая группировка ошибок** — встроена в отчёт, без AI: упавшие и нестабильные тесты сгруппированы по нормализованной ошибке, с долей падений и местом в коде, где ошибка возникает чаще всего. У каждой группы есть ссылка на разбор AI-агентом.',
+    '',
+    'Классификация каждого теста, сетевые ошибки и консоль из трейсов, AI-агент (Ask AI / Fix) — во вкладке **Insights**.',
+  ].join('\n'),
+  en: [
+    'One place for everything known about the failures of this run:',
+    '',
+    '1. **Skill analysis** — the output of your log-analysis skill / LLM (repeated errors across tests, root causes, recommendations), added after the run with `pw-extended-report add-analysis`.',
+    '2. **Automatic error grouping** — built into the report, no AI: failed and flaky tests grouped by normalized error message, with failure rate and the line that throws most often. Each group links to the AI agent.',
+    '',
+    'Per-test classification, network / console errors from traces and the AI agent are in the **Insights** tab.',
+  ].join('\n'),
+};
 
 function parseBooleanEnvVar(name: string): boolean | undefined {
   const value = process.env[name];
@@ -928,6 +946,26 @@ function resolvePlaywrightCore(rootDir: string): string {
   } catch {
   }
   return require.resolve('playwright-core');
+}
+
+/** Where Playwright's rootDir is inside the repository (git root, else nearest package.json). */
+function rootDirInRepo(rootDir: string): string | undefined {
+  let dir = rootDir;
+  let packageDir: string | undefined;
+  while (true) {
+    if (fs.existsSync(path.join(dir, '.git')))
+      return toPosixPath(path.relative(dir, rootDir));
+    if (!packageDir && fs.existsSync(path.join(dir, 'package.json')))
+      packageDir = dir;
+    const parent = path.dirname(dir);
+    if (parent === dir)
+      return packageDir ? toPosixPath(path.relative(packageDir, rootDir)) : undefined;
+    dir = parent;
+  }
+}
+
+function errorTitle(text: string): string {
+  return (text.split('\n').map(l => l.trim()).find(Boolean) ?? '').replace(/^Error:\s*/, '').slice(0, 200);
 }
 
 function red(text: string) {

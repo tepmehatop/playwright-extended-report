@@ -86,7 +86,7 @@ test('markdown tab renders and links into tests', async ({ page }) => {
 
 test('failure analysis tab merges the skill analysis with automatic grouping', async ({ page }) => {
   await openReport(page, '#?tab=failures');
-  await expect(page.getByTestId('extended-tab-failures')).toContainText('One place for everything known about the failures');
+  await expect(page.getByTestId('extended-tab-failures')).toContainText('Всё, что известно о падениях этого прогона');
   // No skill output yet: a placeholder explains how to add it.
   await expect(page.getByTestId('extended-section-skill')).toContainText('pw-extended-report add-analysis');
   cliRun('add-analysis', reportDir, '--file', 'example/ai-analysis.md', '--source', 'jenkins-log-skill');
@@ -104,7 +104,7 @@ test('failure analysis tab merges the skill analysis with automatic grouping', a
 test('automatic grouping groups tests by error', async ({ page }) => {
   await openReport(page, '#?tab=failures');
   const content = page.getByTestId('extended-section-auto').locator('.markdown-body');
-  await expect(content).toContainText('grouped into 6 distinct error(s)');
+  await expect(content).toContainText('сгруппированы в 6 разных ошибок');
   const group = content.locator('#group-1');
   await expect(group).toContainText('expect(locator).toHaveText(expected) failed');
   const links = content.locator('h3#group-1 ~ ul').first().getByRole('link');
@@ -183,17 +183,17 @@ test.describe('insights tab', () => {
   test('classifies failures with evidence', async ({ page }) => {
     await page.goto(server.url + '#?tab=insights');
     await expect(page.getByTestId('insight-card')).toHaveCount(8);
-    await expect(card(page, 'app › cart items are loaded from api').getByTestId('insight-kind')).toHaveText('Environment');
-    await expect(card(page, 'app › profile shows user name').getByTestId('insight-kind')).toHaveText('Product bug');
-    await expect(card(page, 'cart › adds item to cart').getByTestId('insight-kind')).toHaveText('Test bug');
-    await expect(card(page, 'checkout › flaky payment widget').getByTestId('insight-kind')).toHaveText('Flaky');
+    await expect(card(page, 'app › cart items are loaded from api').getByTestId('insight-kind')).toHaveText('Окружение');
+    await expect(card(page, 'app › profile shows user name').getByTestId('insight-kind')).toHaveText('Баг продукта');
+    await expect(card(page, 'cart › adds item to cart').getByTestId('insight-kind')).toHaveText('Ошибка теста');
+    await expect(card(page, 'checkout › flaky payment widget').getByTestId('insight-kind')).toHaveText('Нестабильный');
     // Filter by kind.
     // The login test fails on an empty page: not blamed on the locator.
-    await expect(card(page, 'user can log in').getByTestId('insight-kind')).toHaveText('Unclassified');
-    await expect(card(page, 'user can log in')).toContainText('The page was empty when the test failed');
+    await expect(card(page, 'user can log in').getByTestId('insight-kind')).toHaveText('Не определено');
+    await expect(card(page, 'user can log in')).toContainText('Страница была пустой в момент падения');
     // reload() of a setContent page leaves it empty: also not a locator problem.
-    await expect(card(page, 'cart › cart survives reload')).toContainText('The page was empty when the test failed');
-    await page.getByRole('button', { name: /^Test bug/ }).click();
+    await expect(card(page, 'cart › cart survives reload')).toContainText('Страница была пустой в момент падения');
+    await page.getByRole('button', { name: /^Ошибка теста/ }).click();
     await expect(page.getByTestId('insight-card')).toHaveCount(2);
   });
 
@@ -209,8 +209,8 @@ test.describe('insights tab', () => {
   test('compares failed and passed attempts', async ({ page }) => {
     await page.goto(server.url + '#?tab=insights');
     const flaky = card(page, 'checkout › flaky payment widget');
-    await flaky.getByRole('button', { name: 'Compare attempts' }).click();
-    await expect(flaky.getByTestId('attempts-compare')).toContainText('Attempt #1 failed, attempt #2 passed');
+    await flaky.getByRole('button', { name: 'Сравнить попытки' }).click();
+    await expect(flaky.getByTestId('attempts-compare')).toContainText('Попытка #1 упала, попытка #2 прошла');
     await expect(flaky.locator('.attempt-column')).toHaveCount(2);
   });
 
@@ -219,11 +219,11 @@ test.describe('insights tab', () => {
     await page.goto(server.url + '#?tab=insights');
     const api = card(page, 'app › cart items are loaded from api');
     await api.getByRole('button', { name: 'Ask AI' }).click();
-    await expect(api.getByTestId('agent-answer')).toContainText('ENVIRONMENT');
+    await expect(api.getByTestId('agent-answer')).toContainText('ОКРУЖЕНИЕ');
     await api.getByTestId('agent-evidence').locator('summary').click();
     await expect(api.getByTestId('agent-evidence')).toContainText('GET http://demo.local/api/cart → 500');
     await api.getByRole('button', { name: 'Fix ▾' }).click();
-    await page.getByRole('menuitem', { name: 'Copy rerun command' }).click();
+    await page.getByRole('menuitem', { name: 'Копировать команду перезапуска' }).click();
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('npx playwright test "app.spec.ts:36" --project="chromium" --retries=0 --trace=on');
   });
 
@@ -231,8 +231,8 @@ test.describe('insights tab', () => {
     await openReport(page, '#?tab=insights');
     const api = card(page, 'app › cart items are loaded from api');
     await api.getByRole('button', { name: 'Ask AI' }).click();
-    await expect(api.getByTestId('agent-panel')).toContainText('The AI agent is not available');
-    await api.getByText('Prompt preview').click();
+    await expect(api.getByTestId('agent-panel')).toContainText('AI-агент недоступен');
+    await api.getByTestId('agent-panel').locator('summary', { hasText: 'Промпт' }).click();
     await expect(api.getByTestId('agent-panel').locator('pre')).toContainText('GET http://demo.local/api/cart → 500');
   });
 

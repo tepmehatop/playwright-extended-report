@@ -1,5 +1,9 @@
 # Jenkins
 
+Полная схема (отчёт, Docker-агент, модель, MCP) и пошаговое развёртывание — [DEPLOYMENT.md](DEPLOYMENT.md).
+Чтобы кнопки агента работали в отчёте из Jenkins, задайте при прогоне `EXTENDED_REPORT_AI_ENDPOINT=http://<vm>:8787/`
+(например в `environment { }` пайплайна).
+
 ## Пайплайн
 
 ```groovy
@@ -27,6 +31,8 @@ pipeline {
         sh '''npx pw-extended-report add-analysis extended-report \
               --source "jenkins-log-skill #${BUILD_NUMBER}" \
               --file analysis.md --optional'''
+        // 3. AI-разбор групп ошибок заранее (через Docker-агента на этой же VM, см. DEPLOYMENT.md)
+        sh 'npx pw-extended-report analyze extended-report --agent-url http://localhost:8787/ --max 10 || true'
       }
     }
   }
@@ -48,6 +54,8 @@ pipeline {
 ```
 
 ## CSP
+
+Для кнопок агента добавьте в CSP `connect-src` на адрес Docker-агента, например `connect-src 'self' http://jenkins-vm.internal:8787`.
 
 HTML Publisher по умолчанию отдаёт страницы со строгим Content-Security-Policy. С ним **не работает
 ни штатный отчёт Playwright, ни этот** (инлайн-скрипт, `blob:`, `data:`). Если штатный отчёт у вас уже

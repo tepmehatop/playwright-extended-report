@@ -12,3 +12,5 @@ tests/.output/
 example/extended-report-history.json
 extended-report-history.json
 tests/.output-agent/
+docker/.env
+docker/mcp.json

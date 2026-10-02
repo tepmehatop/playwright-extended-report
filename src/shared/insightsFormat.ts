@@ -23,6 +23,12 @@ export type Classification = {
 export type NetworkIssue = {
   method: string;
   url: string;
+  /** Ready-to-run cURL (secrets masked). */
+  curl?: string;
+  requestBody?: string;
+  responseBody?: string;
+  /** When the request started (ISO). */
+  startedAt?: string;
   /** HTTP status, 0 when the request failed without a response. */
   status: number;
   statusText?: string;
@@ -52,8 +58,25 @@ export type TestHistory = {
   instability: number;
 };
 
+/** Analysis prepared ahead of time, e.g. by `pw-extended-report analyze` in CI. */
+export type PrecomputedAnalysis = { markdown: string, model?: string, generatedAt: string, evidence?: string };
+
+export type InsightCluster = {
+  id: number;
+  /** First line of the error, without "Error:". */
+  title: string;
+  category: string;
+  signature: string;
+  sampleError: string;
+  testIds: string[];
+  topLocation?: string;
+  ai?: PrecomputedAnalysis;
+};
+
 export type InsightTest = {
   testId: string;
+  clusterId?: number;
+  ai?: PrecomputedAnalysis;
   title: string;
   titlePath: string[];
   projectName: string;
@@ -82,6 +105,12 @@ export type InsightsData = {
   version: 1;
   runId: string;
   generatedAt: string;
+  /** Language of generated texts. */
+  language?: 'ru' | 'en';
+  /** Failed tests grouped by error (same as the "Automatic error grouping"). */
+  clusters?: InsightCluster[];
+  /** For "Open in IDE": where the Playwright rootDir (test file paths are relative to it) is inside the repository. */
+  paths?: { rootDirInRepo: string };
   /** Failed and flaky tests of the current run, plus tests with history signals. */
   tests: InsightTest[];
   history?: {
