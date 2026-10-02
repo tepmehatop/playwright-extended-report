@@ -9,15 +9,23 @@
 фильтры, trace viewer, «Copy prompt» те же, что у штатного отчёта, потому что UI скопирован
 из исходников Playwright.
 
-![Вкладка с AI-анализом](docs/images/ai-tab-light.png)
+![Вкладка Insights](docs/images/insights-light.png)
 
 <details>
 <summary>Ещё скриншоты (тёмная тема, Failure analysis, обзор)</summary>
 
+![Вкладка с AI-анализом](docs/images/ai-tab-light.png)
 ![Failure analysis, тёмная тема](docs/images/failures-tab-dark.png)
 ![Обзор](docs/images/overview-light.png)
 
 </details>
+
+## Попробовать за минуту
+
+```bash
+npm ci && npm run build && npx playwright install chromium
+npm run demo        # 5 прогонов демо-проекта (копится история), AI-вкладка, отчёт на http://localhost:9324
+```
 
 ## Что умеет
 
@@ -30,6 +38,12 @@
   - `[тест](#?test=Название теста)` открывает тест по названию (скилл знает названия из логов, а `testId` не знает);
   - `[упавшие](#?q=s:failed)` ведёт на любой фильтр штатного поиска;
   - `[вкладка](#?tab=failures)` открывает другую вкладку, `[раздел](#заголовок)` скроллит к заголовку.
+- **Встроенная вкладка Insights** ([docs/INSIGHTS.md](docs/INSIGHTS.md)):
+  1. классификация каждого падения: *Product bug / Test bug / Environment / UI change / Flaky*, с объяснением и доказательствами;
+  2. история прогонов: новые и известные падения, нестабильные тесты, регрессии длительности, «починилось с прошлого прогона»;
+  3. сравнение упавшей и успешной попытки бок о бок: где разошлись шаги, что стало медленнее, скриншоты;
+  4. упавшие сетевые запросы (4xx/5xx) и ошибки браузера (`console.error`, необработанные исключения) прямо из `trace.zip`;
+  5. кнопки **Ask AI** (через ваш LLM-шлюз, ключи не попадают в отчёт) и **Fix** (промпт для healer-агента Playwright, команда перезапуска, ссылка на Jenkins-джобу).
 - **Встроенная вкладка Failure analysis**: упавшие и flaky тесты сгруппированы по нормализованной сигнатуре ошибки
   (тип, локатор, ожидание), с категорией (Assertion / Locator / Timeout / Network / Browser crash / Snapshot),
   процентом падений и местом в коде, где ошибка возникает чаще всего.
@@ -96,7 +110,8 @@ npx pw-extended-report show extended-report      # локальный просм
 pw-extended-report add-tab   [report-dir] --id <id> (--file <path>|--content <text>) [options]
 pw-extended-report remove-tab [report-dir] --id <id>
 pw-extended-report list-tabs  [report-dir]
-pw-extended-report show       [report-dir] [--host] [--port] [--no-open]
+pw-extended-report show       [report-dir] [--host] [--port] [--no-open] [--ai | --ai-mock]
+pw-extended-report ai-gateway [--host] [--port] [--ai-mock]
 ```
 
 | Опция `add-tab` | Описание |
@@ -130,13 +145,31 @@ await upsertTab('extended-report', { id: 'ai', title: 'AI', file: 'analysis.md',
 | `tabs` | `[]` | — | Вкладки на момент генерации: `{ id, title, file \| content, format?, icon?, badge?, order?, optional? }`. |
 | `failureClusters` | `true` | — | `false` или `{ title?, order? }`. |
 | `summaryJson` | `true` | — | Писать `report-summary.json`. |
+| `insights` | `true` | `EXTENDED_REPORT_HISTORY_FILE`, `EXTENDED_REPORT_RUN_ID`, `EXTENDED_REPORT_AI_ENDPOINT`, `EXTENDED_REPORT_FIX_URL` | `false` или `{ title?, order?, history?: false \| { file?, maxRuns? }, traces?, aiEndpoint?, fixUrlTemplate? }`, см. INSIGHTS.md. |
 | `noSnippets`, `noCopyPrompt`, `doNotInlineAssets`, `mergeFiles`, `attachmentsBaseURL` | как у `html` | `EXTENDED_REPORT_*` | Те же опции, что у штатного репортёра. |
 
 Переменные окружения намеренно не `PLAYWRIGHT_HTML_*`: иначе оба отчёта писали бы в одну папку.
 
+## Что учесть
+
+- **Jenkins и CSP.** HTML Publisher по умолчанию блокирует скрипты отчёта. Если штатный отчёт Playwright у вас
+  уже открывается в Jenkins, CSP уже ослаблен и этот отчёт тоже заработает. Иначе см. [docs/JENKINS.md](docs/JENKINS.md).
+- **`file://`.** При открытии `index.html` как локального файла не работают trace viewer, «Copy prompt» и снапшот
+  страницы в «Ask AI»: браузер запрещает `fetch` на `file://`. У штатного отчёта так же. Смотрите через HTTP:
+  `pw-extended-report show` или публикация в Jenkins.
+- **Шарды.** В объединённом (`merge-reports`) отчёте пустой таймлайн шардов в Speedboard: эти данные доступны
+  только через внутренний API Playwright. Остальное работает.
+- **История** хранится в файле `extended-report-history.json`; в CI его нужно сохранять между билдами
+  (см. [docs/INSIGHTS.md](docs/INSIGHTS.md)). Без этого каждый прогон считается первым.
+- **Nexus.** `package-lock.json` в репозитории указывает на registry.npmjs.org. Во внутреннем контуре выполните
+  `npm install` через ваш registry, чтобы lockfile пересоздался, и задайте пакету свой scope, например `@qa/…`
+  ([docs/PUBLISHING.md](docs/PUBLISHING.md)).
+- **Классификация эвристическая**: правила объясняют решение через «evidence», а уточнять его должна LLM через «Ask AI».
+
 ## Документация
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — как устроен штатный отчёт Playwright и что изменено здесь.
+- [docs/INSIGHTS.md](docs/INSIGHTS.md) — вкладка Insights: классификация, история, сеть и консоль, сравнение попыток, Ask AI, Fix.
 - [docs/CUSTOM_TABS.md](docs/CUSTOM_TABS.md) — формат вкладок, ссылки, как добавить свой тип вкладки в UI.
 - [docs/JENKINS.md](docs/JENKINS.md) — пайплайн, публикация отчёта, CSP.
 - [docs/LLM_INTEGRATION.md](docs/LLM_INTEGRATION.md) — как подключить LLM / скилл: входные данные, промпт, вывод во вкладку.

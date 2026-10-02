@@ -16,7 +16,9 @@ export type ExtendedTabFormat =
   /** `content` is an HTML fragment. Sanitized: scripts and event handlers are removed. */
   | 'html'
   /** `content` is a URL (usually relative to the report folder, e.g. `tabs/ai/index.html`) shown in an iframe. Use for pages that need their own JS. */
-  | 'iframe';
+  | 'iframe'
+  /** Built-in: `content` is JSON of InsightsData (see insightsFormat.ts), rendered by the Insights view. */
+  | 'insights';
 
 export type ExtendedTabIcon = 'sparkle' | 'bug' | 'graph' | 'note' | 'list' | 'none';
 
@@ -61,8 +63,8 @@ export function validateTab(tab: ExtendedTab): string | undefined {
     return `invalid tab id "${tab.id}": use letters, digits, "-" and "_"`;
   if (typeof tab.title !== 'string' || !tab.title)
     return `tab "${tab.id}": title is required`;
-  if (!['markdown', 'html', 'iframe'].includes(tab.format))
-    return `tab "${tab.id}": format must be one of markdown, html, iframe`;
+  if (!['markdown', 'html', 'iframe', 'insights'].includes(tab.format))
+    return `tab "${tab.id}": format must be one of markdown, html, iframe, insights`;
   if (typeof tab.content !== 'string')
     return `tab "${tab.id}": content must be a string`;
   return undefined;

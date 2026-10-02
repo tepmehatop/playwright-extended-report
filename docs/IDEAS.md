@@ -19,14 +19,29 @@
 | [bug0: Playwright Test Agents](https://bug0.com/blog/playwright-test-agents), [Bondar Academy review](https://bondaracademy.com/blog/playwright-ai-agents-review) | Из трёх агентов (planner, generator, healer) реально полезен **healer**: перезапускает тест в debug, собирает консоль, сеть и снапшоты, чинит. Трейсы решений агента — аудит. |
 | [TestMu AI](https://www.testmuai.com/learning-hub/playwright-ai/), [testomat.io](https://testomat.io/blog/playwright-ai-revolution-in-test-automation/), [ContextQA](https://learning.contextqa.com/testing-with-ai-coding-agents/playwright-testing), [mcpmarket skill](https://mcpmarket.com/tools/skills/playwright-test-reporting-7) | RCA = «упавший шаг + вероятная причина + трейс»; автоматический черновик баг-репорта; разделение падений на product / test data / locator / environment; приоритизация тестов по истории; свой AI-провайдер ради комплаенса. |
 
+| [TestDino: сравнение инструментов](https://www.testdino.com/compare), [Allure vs Currents](https://currents.dev/posts/allure-vs-currents) | Allure — гибкие категории и вложения; Currents — облачная observability; ReportPortal — AI-кластеризация и долгие тренды. Общий пробел у всех — роль-ориентированные дашборды и предиктивные паттерны. |
+
 Не открылись полностью (рендер на JS или таймаут): stagewright.dev и часть статей Medium и TestDino.
 По ним использованы README репозиториев и поисковые выдержки.
+
+## Коротко: что самое полезное для отладки
+
+1. **Классификация падений** (баг продукта / ошибка теста / окружение / flaky) с меткой у теста — как в TestDino и ReportPortal.
+2. **История прогонов**: «упал 3 из 10», новые против известных падений, рост длительности — как в Smart Reporter и Ortoni.
+3. **Сравнение упавшей и успешной попытки бок о бок** — лучший инструмент для flaky (Ortoni).
+4. **Сеть и консоль из trace.zip** на уровне теста: часто причина — 500 от бэкенда.
+5. **Маскировка секретов** перед отправкой данных в LLM (Monocart).
+6. **«Спросить AI»** через внутренний шлюз (ключи не в отчёте) и **«Починить»** через healer-агента Playwright —
+   по обзорам из трёх агентов на практике полезен только healer.
+
+**Пункты 1, 2, 3, 4 и 6 уже реализованы** во вкладке Insights (см. [INSIGHTS.md](INSIGHTS.md)). Пункт 5 — следующий кандидат.
 
 ## Что уже есть в этом пакете
 
 - Вкладки с Markdown, HTML и iframe, добавление после прогона из Jenkins.
 - Failure analysis: группировка по сигнатуре ошибки, категории, failure rate, место в коде.
 - `report-summary.json` как вход для LLM; кликабельные ссылки на тесты из Markdown.
+- Insights: классификация, история, сеть и консоль из трейса, сравнение попыток, Ask AI, Fix.
 - Всё штатное: Copy prompt, trace viewer, фильтры, Speedboard, темы.
 
 ## Идеи: что добавить дальше

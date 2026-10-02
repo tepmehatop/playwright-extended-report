@@ -8,7 +8,8 @@ import fs from 'fs';
 import path from 'path';
 
 import { isValidBadgeKind, isValidTabIcon, readTabs, removeTab, upsertTab } from '../tabs';
-import { showReport } from '../server';
+import { showReport, startAiGateway } from '../server';
+import { aiOptionsFromEnv } from '../aiGateway';
 
 import type { ExtendedTabFormat, ExtendedTabInput } from '../tabs';
 
@@ -36,7 +37,14 @@ Commands:
 
   remove-tab [report-dir] --id <id>
   list-tabs [report-dir]
-  show [report-dir] [--host <host>] [--port <port>] [--no-open]
+  show [report-dir] [--host <host>] [--port <port>] [--no-open] [--ai | --ai-mock]
+      --ai                   Enable "Ask AI" in the Insights tab through an OpenAI-compatible API:
+                             EXTENDED_REPORT_AI_BASE_URL (default https://api.openai.com/v1),
+                             EXTENDED_REPORT_AI_API_KEY, EXTENDED_REPORT_AI_MODEL, EXTENDED_REPORT_AI_LANGUAGE.
+      --ai-mock              Enable "Ask AI" with canned answers (demo, no model needed).
+  ai-gateway [--host <host>] [--port <port>] [--ai-mock]
+                             Standalone "Ask AI" backend with CORS for reports hosted elsewhere
+                             (point insights.aiEndpoint / EXTENDED_REPORT_AI_ENDPOINT to it).
   help
 
 Examples:
@@ -61,7 +69,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       }
       const name = arg.slice(2);
       const next = rest[i + 1];
-      if (next !== undefined && (!next.startsWith('--') || next === '-') && !['optional', 'no-open'].includes(name)) {
+      if (next !== undefined && (!next.startsWith('--') || next === '-') && !['optional', 'no-open', 'ai', 'ai-mock'].includes(name)) {
         flags.set(name, next);
         ++i;
       } else {
@@ -159,7 +167,16 @@ async function main() {
     }
     case 'show': {
       const port = stringFlag(flags, 'port');
-      await showReport(reportDir, { host: stringFlag(flags, 'host'), port: port ? +port : undefined, open: !flags.has('no-open') });
+      const ai = flags.has('ai') || flags.has('ai-mock') ? aiOptionsFromEnv(flags.has('ai-mock')) : undefined;
+      await showReport(reportDir, { host: stringFlag(flags, 'host'), port: port ? +port : undefined, open: !flags.has('no-open'), ai });
+      return;
+    }
+    case 'ai-gateway': {
+      const port = stringFlag(flags, 'port');
+      const ai = aiOptionsFromEnv(flags.has('ai-mock'));
+      const gateway = await startAiGateway(ai, { host: stringFlag(flags, 'host'), port: port ? +port : undefined });
+      console.log(`AI gateway listening: ${gateway.url} (${ai.mode === 'mock' ? 'mock answers' : `${ai.model} via ${ai.baseUrl}`})`);
+      await new Promise(() => {});
       return;
     }
     case undefined:

@@ -35,6 +35,7 @@ import { codeFrameColumns } from '@babel/code-frame';
 
 import { calculateSha1, copyFileAndMakeWritable, extensionForContentType, formatError, formatResultFailure, MultiMap, removeFolders, resolveReporterOutputPath, sanitizeForFilePath, stripAnsiEscapes, toPosixPath } from './compat';
 import { clusterFailures, collectFailedTests, renderClustersMarkdown } from './failureClusters';
+import { buildInsights } from './insights';
 import { encodeTabs, resolveTabInput } from '../tabs';
 import { showReport } from '../server';
 import { sortTabs } from '../shared/tabsFormat';
@@ -42,6 +43,7 @@ import { sortTabs } from '../shared/tabsFormat';
 import type { ExtendedTab } from '../shared/tabsFormat';
 import type { ExtendedTabInput } from '../tabs';
 import type { FailureCluster, FailedTestInfo } from './failureClusters';
+import type { InsightsData } from '../shared/insightsFormat';
 import type { HTMLReport, HTMLReportOptions, Location, Stats, TestAttachment, TestCase, TestCaseSummary, TestFile, TestFileSummary, TestResult, TestStep } from '../../web/src/types';
 import type { Metadata, TestAnnotation } from '@playwright/test';
 import type * as api from '@playwright/test/reporter';
@@ -77,6 +79,22 @@ export type ExtendedReporterOptions = {
   failureClusters?: boolean | { title?: string, order?: number };
   /** Write report-summary.json (stats, failures, clusters) for LLM / scripts. Default: true. */
   summaryJson?: boolean;
+  /**
+   * Built-in "Insights" tab: failure classification, run history, network / console errors
+   * from traces, retry comparison, "Ask AI" and "Fix" buttons. Default: true.
+   */
+  insights?: boolean | {
+    title?: string;
+    order?: number;
+    /** Run history. Default file: `extended-report-history.json` next to the report folder. Env: EXTENDED_REPORT_HISTORY_FILE. */
+    history?: false | { file?: string, maxRuns?: number };
+    /** Read trace.zip of failed tests for network / console errors. Default: true. */
+    traces?: boolean;
+    /** POST endpoint for "Ask AI" (see docs/INSIGHTS.md). Env: EXTENDED_REPORT_AI_ENDPOINT. */
+    aiEndpoint?: string;
+    /** URL template for "Fix" with {file} {line} {title} {project} {testId}. Env: EXTENDED_REPORT_FIX_URL. */
+    fixUrlTemplate?: string;
+  };
   configDir?: string;
 };
 
@@ -92,6 +110,7 @@ export type ReportSummary = {
   topLevelErrors: string[];
   failedTests: (FailedTestInfo & { clusterId?: number })[];
   clusters: (Omit<FailureCluster, 'tests'> & { testIds: string[] })[];
+  insights?: InsightsData;
 };
 
 class ExtendedHtmlReporter implements api.Reporter {
@@ -242,6 +261,46 @@ class ExtendedHtmlReporter implements api.Reporter {
       }
     }
 
+    let insights: InsightsData | undefined;
+    const insightsOption = this._options.insights ?? true;
+    if (insightsOption) {
+      const o = typeof insightsOption === 'object' ? insightsOption : {};
+      const historyFile = o.history === false ? false : process.env.EXTENDED_REPORT_HISTORY_FILE
+        ? path.resolve(process.env.EXTENDED_REPORT_HISTORY_FILE)
+        : o.history?.file ? path.resolve(this._options.configDir ?? process.cwd(), o.history.file)
+          : path.join(path.dirname(this._outputFolder), 'extended-report-history.json');
+      try {
+        const built = await buildInsights(this.suite, this.config.rootDir, result, {
+          historyFile,
+          maxRuns: (o.history && o.history.maxRuns) || 30,
+          runId: process.env.EXTENDED_REPORT_RUN_ID || process.env.BUILD_NUMBER || process.env.GITHUB_RUN_NUMBER || result.startTime.toISOString(),
+          runUrl: process.env.BUILD_URL,
+          traces: o.traces ?? true,
+          aiEndpoint: process.env.EXTENDED_REPORT_AI_ENDPOINT || o.aiEndpoint,
+          fixUrlTemplate: process.env.EXTENDED_REPORT_FIX_URL || o.fixUrlTemplate,
+        });
+        insights = built.data;
+        if (built.history)
+          fs.writeFileSync(path.join(this._outputFolder, 'history.json'), JSON.stringify(built.history));
+        const failing = insights.tests.length;
+        tabs.push({
+          id: 'insights',
+          title: o.title || 'Insights',
+          icon: 'sparkle',
+          format: 'insights',
+          order: o.order ?? 50,
+          badge: failing || undefined,
+          badgeKind: insights.tests.some(t => t.outcome === 'unexpected') ? 'danger' : 'attention',
+          description: 'Failure classification, history, network and console errors, retry comparison, Ask AI / Fix.',
+          generatedAt: insights.generatedAt,
+          source: 'playwright-extended-report',
+          content: JSON.stringify(insights),
+        });
+      } catch (e) {
+        writeLine(red(`Extended report: failed to build insights: ${e.stack || e.message}`));
+      }
+    }
+
     if (this._options.summaryJson === false)
       return { tabs };
 
@@ -263,6 +322,7 @@ class ExtendedHtmlReporter implements api.Reporter {
       topLevelErrors: this._topLevelErrors.map(e => stripAnsiEscapes(formatError(e).message)),
       failedTests: failed.map(t => ({ ...t, clusterId: clusterOf.get(t.testId) })),
       clusters: clusters.map(({ tests, ...rest }) => ({ ...rest, testIds: tests.map(t => t.testId) })),
+      insights,
     };
     return { tabs, summary };
   }

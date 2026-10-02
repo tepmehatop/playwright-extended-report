@@ -12,10 +12,20 @@ npm pack           # playwright-extended-report-<version>.tgz
 `npm pack` и `npm publish` сами запускают `npm run build` (скрипт `prepack`).
 
 Что попадает в пакет (`files` в package.json): `dist/`, `docs/*.md`, `README.md`, `LICENSE`, `NOTICE`.
-Runtime-зависимости: только `yazl` и `@babel/code-frame`. React, Vite и прочее нужны лишь на этапе
+Runtime-зависимости: только `yazl`, `yauzl` (чтение trace.zip) и `@babel/code-frame`. React, Vite и прочее нужны лишь на этапе
 сборки: UI уже собран в `dist/web`. Peer-зависимость: `@playwright/test >= 1.45`.
 
 Проверить содержимое без создания архива: `npm pack --dry-run`.
+
+## package-lock.json
+
+Lockfile в репозитории собран через публичный registry (`registry.npmjs.org`). Во внутреннем контуре:
+
+```bash
+rm package-lock.json
+npm install            # с .npmrc, указывающим на Nexus, lockfile пересоздастся с вашими URL
+git commit -am "chore: lockfile for internal registry"
+```
 
 ## Имя пакета
 

@@ -48,10 +48,11 @@ test('extra tabs appear in the navigation bar with badges', async ({ page }) => 
   await openReport(page);
   const nav = page.locator('nav');
   await expect(nav.getByTestId('extended-tab-nav-ai')).toHaveText(/AI анализ\s*3/);
-  await expect(nav.getByTestId('extended-tab-nav-failures')).toHaveText(/Failure analysis\s*4/);
+  await expect(nav.getByTestId('extended-tab-nav-failures')).toHaveText(/Failure analysis\s*6/);
+  await expect(nav.getByTestId('extended-tab-nav-insights')).toHaveText(/Insights\s*8/);
   // order: 10 puts the AI tab before the built-in failures tab (order 100).
   const ids = await nav.locator('[data-testid^=extended-tab-nav-]').evaluateAll(els => els.map(e => e.getAttribute('data-testid')));
-  expect(ids).toEqual(['extended-tab-nav-ai', 'extended-tab-nav-failures']);
+  expect(ids).toEqual(['extended-tab-nav-ai', 'extended-tab-nav-insights', 'extended-tab-nav-failures']);
 });
 
 test('markdown tab renders and links into tests', async ({ page }) => {
@@ -80,13 +81,13 @@ test('markdown tab renders and links into tests', async ({ page }) => {
   await page.goBack();
   await expect(content.getByRole('heading', { name: 'Анализ прогона (пример вывода скилла)' })).toBeVisible();
   await page.locator('nav').getByRole('link', { name: /Failed/ }).click();
-  await expect(page.locator('.test-file-test')).toHaveCount(5);
+  await expect(page.locator('.test-file-test')).toHaveCount(7);
 });
 
 test('failure clusters tab groups tests by error', async ({ page }) => {
   await openReport(page, '#?tab=failures');
   const content = page.locator('.markdown-body');
-  await expect(content).toContainText('grouped into 4 distinct error(s)');
+  await expect(content).toContainText('grouped into 6 distinct error(s)');
   const group = content.locator('#group-1');
   await expect(group).toContainText('expect(locator).toHaveText(expected) failed');
   const links = content.locator('h3#group-1 ~ ul').first().getByRole('link');
@@ -101,7 +102,7 @@ test('native report features still work over http', async ({ page }) => {
   const server = await startReportServer(reportDir, { port: 0 });
   try {
     await page.goto(server.url);
-    await expect(page.locator('.test-file-test')).toHaveCount(8);
+    await expect(page.locator('.test-file-test')).toHaveCount(14);
     await page.getByRole('link', { name: 'user can log in' }).first().click();
     await expect(page.getByRole('button', { name: 'Copy prompt' })).toBeVisible();
     await page.getByRole('link', { name: 'View Trace' }).first().click();
@@ -114,8 +115,8 @@ test('native report features still work over http', async ({ page }) => {
 
 test('report-summary.json is written for LLM / scripts', () => {
   const summary = JSON.parse(fs.readFileSync(path.join(reportDir, 'report-summary.json'), 'utf-8'));
-  expect(summary.stats).toMatchObject({ total: 9, expected: 2, unexpected: 5, flaky: 1, skipped: 1 });
-  expect(summary.clusters).toHaveLength(4);
+  expect(summary.stats).toMatchObject({ total: 15, expected: 6, unexpected: 7, flaky: 1, skipped: 1 });
+  expect(summary.clusters).toHaveLength(6);
   expect(summary.clusters[0].testIds).toHaveLength(3);
   expect(summary.failedTests[0]).toHaveProperty('error');
 });
@@ -148,5 +149,72 @@ test('add-tab replaces a tab with the same id and keeps the report readable', as
   await openReport(page, '#?tab=ai');
   await expect(page.locator('.markdown-body h1')).toHaveText('Second version');
   await page.locator('nav').getByRole('link', { name: /^All/ }).click();
-  await expect(page.locator('.test-file-test')).toHaveCount(8);
+  await expect(page.locator('.test-file-test')).toHaveCount(14);
+});
+
+test.describe('insights tab', () => {
+  let server: Awaited<ReturnType<typeof startReportServer>>;
+  test.beforeAll(async () => {
+    server = await startReportServer(reportDir, { port: 0, ai: { mode: 'mock' } });
+  });
+  test.afterAll(async () => {
+    await server.close();
+  });
+
+  const card = (page: Page, title: string) => page.getByTestId('insight-card').filter({ has: page.getByRole('link', { name: title, exact: true }) });
+
+  test('classifies failures with evidence', async ({ page }) => {
+    await page.goto(server.url + '#?tab=insights');
+    await expect(page.getByTestId('insight-card')).toHaveCount(8);
+    await expect(card(page, 'app › cart items are loaded from api').getByTestId('insight-kind')).toHaveText('Environment');
+    await expect(card(page, 'app › profile shows user name').getByTestId('insight-kind')).toHaveText('Product bug');
+    await expect(card(page, 'cart › adds item to cart').getByTestId('insight-kind')).toHaveText('Test bug');
+    await expect(card(page, 'checkout › flaky payment widget').getByTestId('insight-kind')).toHaveText('Flaky');
+    // Filter by kind.
+    await page.getByRole('button', { name: /^Test bug/ }).click();
+    await expect(page.getByTestId('insight-card')).toHaveCount(4);
+  });
+
+  test('shows network and browser errors from the trace', async ({ page }) => {
+    await page.goto(server.url + '#?tab=insights');
+    const api = card(page, 'app › cart items are loaded from api');
+    await expect(api.getByTestId('insight-network')).toContainText('500');
+    await expect(api.getByTestId('insight-network')).toContainText('http://demo.local/api/cart');
+    await expect(api.getByTestId('insight-console')).toContainText('Failed to load cart: HTTP 500');
+    await expect(card(page, 'app › profile shows user name').getByTestId('insight-console')).toContainText("TypeError: Cannot read properties of undefined (reading 'name')");
+  });
+
+  test('compares failed and passed attempts', async ({ page }) => {
+    await page.goto(server.url + '#?tab=insights');
+    const flaky = card(page, 'checkout › flaky payment widget');
+    await flaky.getByRole('button', { name: 'Compare attempts' }).click();
+    await expect(flaky.getByTestId('attempts-compare')).toContainText('Attempt #1 failed, attempt #2 passed');
+    await expect(flaky.locator('.attempt-column')).toHaveCount(2);
+  });
+
+  test('asks AI through the gateway and offers fixes', async ({ page, context }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    await page.goto(server.url + '#?tab=insights');
+    const api = card(page, 'app › cart items are loaded from api');
+    await api.getByRole('button', { name: 'Ask AI' }).click();
+    await expect(api.getByTestId('ai-answer')).toContainText('Classification: environment');
+    await api.getByRole('button', { name: 'Fix ▾' }).click();
+    await page.getByRole('menuitem', { name: 'Copy rerun command' }).click();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('npx playwright test "app.spec.ts:36" --project="chromium" --retries=0 --trace=on');
+  });
+
+  test('without an AI endpoint falls back to copying the prompt', async ({ page }) => {
+    await openReport(page, '#?tab=insights');
+    const api = card(page, 'app › cart items are loaded from api');
+    await api.getByRole('button', { name: 'Ask AI' }).click();
+    await expect(api.getByTestId('ai-panel')).toContainText('No AI endpoint is available');
+    await api.getByText('Prompt preview').click();
+    await expect(api.getByTestId('ai-panel').locator('pre')).toContainText('GET http://demo.local/api/cart → 500');
+  });
+
+  test('history is recorded across runs', () => {
+    const history = JSON.parse(fs.readFileSync(path.join(reportDir, 'history.json'), 'utf-8'));
+    expect(history.runs).toHaveLength(1);
+    expect(fs.existsSync(path.join(outputRoot, 'extended-report-history.json'))).toBe(true);
+  });
 });

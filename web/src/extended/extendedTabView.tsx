@@ -8,6 +8,7 @@ import type { TestCaseSummary } from '../types';
 import { extendedTabs, findExtendedTab, type ExtendedTab } from './extendedTabs';
 import { tabIcon } from './icons';
 import { renderMarkdown, sanitizeHtml, slugify } from './markdown';
+import { InsightsView } from './insights/insightsView';
 import './extendedTabs.css';
 
 export const kTabParam = 'tab';
@@ -51,7 +52,7 @@ export const ExtendedTabView: React.FC<{
 
 const TabToolbar: React.FC<{ tab: ExtendedTab }> = ({ tab }) => {
   const [copied, setCopied] = React.useState(false);
-  const canExport = tab.format !== 'iframe';
+  const canExport = tab.format === 'markdown' || tab.format === 'html';
   const meta = [
     tab.generatedAt && `Generated: ${formatDate(tab.generatedAt)}`,
     tab.source && `Source: ${tab.source}`,
@@ -119,6 +120,8 @@ const TabContent: React.FC<{ tab: ExtendedTab, report: LoadedReport | undefined 
     target?.scrollIntoView({ block: 'start' });
   }, [report, searchParams]);
 
+  if (tab.format === 'insights')
+    return <InsightsView content={tab.content} report={report} />;
   if (tab.format === 'iframe') {
     return <iframe
       className='extended-tab-iframe'

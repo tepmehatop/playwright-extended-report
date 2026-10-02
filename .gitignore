@@ -9,3 +9,5 @@ example/playwright-report/
 example/extended-report/
 tests/.output/
 .DS_Store
+example/extended-report-history.json
+extended-report-history.json
