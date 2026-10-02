@@ -65,10 +65,12 @@ function visit(file) {
   if (visited.has(file))
     return;
   visited.add(file);
-  if (!/\.tsx?$/.test(file))
+  if (!/\.(tsx?|css)$/.test(file))
     return;
   const source = fs.readFileSync(file, 'utf8');
-  const re = /(?:import|export)\s[^'"]*?from\s+['"]([^'"]+)['"]|import\s+['"]([^'"]+)['"]|import\(['"]([^'"]+)['"]\)/g;
+  const re = file.endsWith('.css')
+    ? /@import\s+['"]([^'"]+)['"]/g
+    : /(?:import|export)\s[^'"]*?from\s+['"]([^'"]+)['"]|import\s+['"]([^'"]+)['"]|import\(['"]([^'"]+)['"]\)/g;
   for (const m of source.matchAll(re)) {
     const resolved = resolveImport(file, m[1] || m[2] || m[3]);
     if (resolved)
