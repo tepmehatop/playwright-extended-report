@@ -7,7 +7,8 @@ import { statusIcon } from '../../statusIcon';
 import type { LoadedReport } from '../../loadedReport';
 import type { FailureKind, HistoryOutcome, InsightsData, InsightTest } from '../../../../src/shared/insightsFormat';
 import { AttemptsCompare } from './attemptsCompare';
-import { AskAiPanel, FixMenu } from './actions';
+import { FixMenu } from './actions';
+import { AgentPanel } from '../agent/agentPanel';
 import './insights.css';
 
 export const kKindLabels: Record<FailureKind, string> = {
@@ -63,11 +64,11 @@ const FilterButton: React.FC<{ active: boolean, onClick: () => void, label: stri
 };
 
 const InsightCard: React.FC<{ test: InsightTest, data: InsightsData, report: LoadedReport | undefined }> = ({ test, data, report }) => {
-  const [panel, setPanel] = React.useState<'none' | 'compare' | 'ai'>('none');
+  const [panel, setPanel] = React.useState<'none' | 'compare' | 'ai' | 'fix'>('none');
   const c = test.classification;
   const kind = c?.kind ?? 'unknown';
   const projectNames = report?.json().projectNames ?? [];
-  const toggle = (p: 'compare' | 'ai') => setPanel(current => current === p ? 'none' : p);
+  const toggle = (p: 'compare' | 'ai' | 'fix') => setPanel(current => current === p ? 'none' : p);
   return <div className='insight-card' data-testid='insight-card'>
     <div className='insight-card-header'>
       {statusIcon(test.outcome === 'flaky' ? 'flaky' : 'unexpected')}
@@ -112,11 +113,11 @@ const InsightCard: React.FC<{ test: InsightTest, data: InsightsData, report: Loa
     <div className='insight-actions'>
       {test.attempts > 1 && <button className={clsx('button', panel === 'compare' && 'selected')} onClick={() => toggle('compare')}>Compare attempts</button>}
       <button className={clsx('button', panel === 'ai' && 'selected')} onClick={() => toggle('ai')}>Ask AI</button>
-      <FixMenu test={test} data={data} />
+      <FixMenu test={test} data={data} onAgentFix={() => setPanel('fix')} />
       <a className='button' href={`#?testId=${encodeURIComponent(test.testId)}`}>Open test</a>
     </div>
     {panel === 'compare' && <AttemptsCompare testId={test.testId} report={report} />}
-    {panel === 'ai' && <AskAiPanel test={test} data={data} report={report} />}
+    {(panel === 'ai' || panel === 'fix') && <AgentPanel key={panel} test={test} data={data} report={report} initialAction={panel === 'fix' ? 'fix' : 'analyze'} />}
   </div>;
 };
 

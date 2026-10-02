@@ -8,9 +8,7 @@ import http from 'http';
 import path from 'path';
 import { spawn } from 'child_process';
 
-import { handleAiRequest } from './aiGateway';
-
-import type { AiOptions } from './aiGateway';
+import type { AgentService } from './agent/service';
 
 const kMimeTypes: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -41,20 +39,20 @@ export type ShowReportOptions = {
   testId?: string;
   /** Open a browser. Default: true. */
   open?: boolean;
-  /** Serve /api/ai/* for the "Ask AI" button. */
-  ai?: AiOptions;
+  /** Serve /api/agent/* for the "Ask AI" / "Fix" buttons. */
+  agent?: AgentService;
 };
 
 export type ReportServer = { url: string, close: () => Promise<void> };
 
 /** Serves the report folder over HTTP. Needed for features that `fetch()` attachments (e.g. "Copy prompt"). */
-export async function startReportServer(reportFolder: string, options: { host?: string, port?: number, ai?: AiOptions } = {}): Promise<ReportServer> {
+export async function startReportServer(reportFolder: string, options: { host?: string, port?: number, agent?: AgentService } = {}): Promise<ReportServer> {
   const folder = path.resolve(reportFolder);
   if (!fs.existsSync(path.join(folder, 'index.html')))
     throw new Error(`No report found at "${folder}"`);
 
   const server = http.createServer((request, response) => {
-    if (options.ai && handleAiRequest(options.ai, request, response, false))
+    if (options.agent && options.agent.handle(request, response))
       return;
     const url = new URL(request.url || '/', 'http://localhost');
     let pathname = decodeURIComponent(url.pathname);
@@ -107,8 +105,10 @@ export async function showReport(reportFolder: string, options: ShowReportOption
   if (options.testId)
     url += `#?testId=${options.testId}`;
   process.stdout.write(`\n  Serving extended report at ${url}. Press Ctrl+C to quit.\n`);
-  if (options.ai)
-    process.stdout.write(`  "Ask AI" is enabled: ${options.ai.mode === 'mock' ? 'mock answers' : `${options.ai.model} via ${options.ai.baseUrl}`}.\n`);
+  if (options.agent) {
+    const status = options.agent.status();
+    process.stdout.write(`  AI agent: ${status.model}. ${status.canRun ? `Run & debug and fixes in ${status.repo}.` : 'Analysis only (no repository: use `pw-extended-report agent` inside the tests repo to run and fix).'}\n`);
+  }
   if (options.open !== false)
     openInBrowser(url);
   return await new Promise<never>(() => {});
@@ -123,10 +123,10 @@ function openInBrowser(url: string) {
   }
 }
 
-/** Standalone "Ask AI" backend with CORS, for reports hosted elsewhere (e.g. Jenkins). */
-export async function startAiGateway(ai: AiOptions, options: { host?: string, port?: number } = {}): Promise<ReportServer> {
+/** Standalone agent backend with CORS, for reports hosted elsewhere (e.g. Jenkins): analysis only. */
+export async function startAiGateway(agent: AgentService, options: { host?: string, port?: number } = {}): Promise<ReportServer> {
   const server = http.createServer((request, response) => {
-    if (!handleAiRequest(ai, request, response, true)) {
+    if (!agent.handle(request, response)) {
       response.statusCode = 404;
       response.end('Not found');
     }
@@ -139,7 +139,7 @@ export async function startAiGateway(ai: AiOptions, options: { host?: string, po
   const address = server.address();
   const port = typeof address === 'object' && address ? address.port : options.port;
   return {
-    url: `http://${host === '0.0.0.0' ? 'localhost' : host}:${port}/api/ai/ask`,
+    url: `http://${host === '0.0.0.0' ? 'localhost' : host}:${port}/`,
     close: () => new Promise<void>(resolve => server.close(() => resolve())),
   };
 }

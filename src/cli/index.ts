@@ -7,9 +7,11 @@
 import fs from 'fs';
 import path from 'path';
 
-import { isValidBadgeKind, isValidTabIcon, readTabs, removeTab, upsertTab } from '../tabs';
+import { isValidBadgeKind, isValidTabIcon, kFailureAnalysisTabId, kSkillSectionId, readTabs, removeSection, removeTab, upsertSection, upsertTab } from '../tabs';
 import { showReport, startAiGateway } from '../server';
-import { aiOptionsFromEnv } from '../aiGateway';
+import { AgentService } from '../agent/service';
+import { llmConfigFromEnv } from '../agent/llm';
+import { Repo } from '../agent/repo';
 
 import type { ExtendedTabFormat, ExtendedTabInput } from '../tabs';
 
@@ -35,19 +37,37 @@ Commands:
       --source <text>        Where the content came from, shown in the tab.
       --optional             Do nothing (exit 0) if --file does not exist.
 
+  add-analysis [report-dir] --file <path>
+                             Put your skill / LLM analysis into the "Failure analysis" tab
+                             (above the automatic error grouping). Replaces the previous one.
+      --title <title>        Section title. Default: "Skill analysis".
+      --source <text>        Where it came from, e.g. "jenkins-log-skill #123".
+      --optional             Do nothing if --file does not exist.
+
+  add-section [report-dir] --tab <tab-id> --id <section-id> --title <title> (--file <path>|--content <text>)
+                             Add a section to any Markdown / HTML tab.
+  remove-section [report-dir] --tab <tab-id> --id <section-id>
+
   remove-tab [report-dir] --id <id>
   list-tabs [report-dir]
-  show [report-dir] [--host <host>] [--port <port>] [--no-open] [--ai | --ai-mock]
-      --ai                   Enable "Ask AI" in the Insights tab through an OpenAI-compatible API:
-                             EXTENDED_REPORT_AI_BASE_URL (default https://api.openai.com/v1),
-                             EXTENDED_REPORT_AI_API_KEY, EXTENDED_REPORT_AI_MODEL, EXTENDED_REPORT_AI_LANGUAGE.
-      --ai-mock              Enable "Ask AI" with canned answers (demo, no model needed).
+  show [report-dir] [--host <host>] [--port <port>] [--no-open] [--ai | --ai-mock] [--repo <dir>] [--config <file>]
+                             Serve the report locally.
+      --ai                   Enable the AI agent (Ask AI / Fix). Model settings: see docs/AGENT.md
+                             (EXTENDED_REPORT_AI_PROVIDER = openai | gigachat | gigacode-ift-ssl | gigacode-cli).
+      --ai-mock              Enable the agent with template answers (demo, no model).
+      --repo <dir>           Tests repository: enables "Run & debug" and applying fixes.
+      --config <file>        Playwright config inside the repo (default: the repo's default).
+
+  agent [report-dir] [--repo <dir>] [--ai-mock] [--port <port>]
+                             Same as "show --ai --repo .": run it inside the tests repository.
+
   ai-gateway [--host <host>] [--port <port>] [--ai-mock]
-                             Standalone "Ask AI" backend with CORS for reports hosted elsewhere
-                             (point insights.aiEndpoint / EXTENDED_REPORT_AI_ENDPOINT to it).
+                             Standalone agent backend with CORS for reports hosted elsewhere
+                             (Jenkins): analysis only. Point EXTENDED_REPORT_AI_ENDPOINT to it.
   help
 
 Examples:
+  pw-extended-report add-analysis --file analysis.md --source "jenkins-log-skill"
   pw-extended-report add-tab --id ai --title "AI analysis" --icon sparkle --file analysis.md
   cat analysis.md | pw-extended-report add-tab extended-report --id ai --file -
   pw-extended-report show extended-report
@@ -142,6 +162,30 @@ async function addTab(reportDir: string, flags: ParsedArgs['flags']) {
     console.log(`Tab "${tab.id}" (${tab.format}) written to ${path.join(reportDir, 'index.html')}`);
 }
 
+async function addSection(reportDir: string, tabId: string, flags: ParsedArgs['flags'], defaults: { id?: string, title?: string, order?: number }) {
+  const id = stringFlag(flags, 'id') || defaults.id;
+  if (!id)
+    throw new Error('--id is required');
+  const file = stringFlag(flags, 'file');
+  const content = stringFlag(flags, 'content');
+  const order = stringFlag(flags, 'order');
+  const section = await upsertSection(reportDir, tabId, {
+    id,
+    title: stringFlag(flags, 'title') || defaults.title || id,
+    order: order !== undefined ? Number(order) : defaults.order,
+    description: stringFlag(flags, 'description'),
+    source: stringFlag(flags, 'source'),
+    generatedAt: new Date().toISOString(),
+    optional: flags.has('optional'),
+    file: file === '-' ? undefined : file ? path.resolve(file) : undefined,
+    content: file === '-' ? await readStdin() : content,
+  });
+  if (!section)
+    console.log(`Skipped section "${id}": ${file} does not exist (--optional).`);
+  else
+    console.log(`Section "${id}" written to tab "${tabId}" in ${path.join(reportDir, 'index.html')}`);
+}
+
 async function main() {
   const { command, positional, flags } = parseArgs(process.argv.slice(2));
   const reportDir = path.resolve(positional[0] || kDefaultReportDir);
@@ -149,6 +193,26 @@ async function main() {
     case 'add-tab':
       await addTab(reportDir, flags);
       return;
+    case 'add-analysis':
+      if (!flags.has('file') && !flags.has('content'))
+        throw new Error('--file is required');
+      await addSection(reportDir, kFailureAnalysisTabId, flags, { id: kSkillSectionId, title: 'Skill analysis', order: 10 });
+      return;
+    case 'add-section': {
+      const tab = stringFlag(flags, 'tab');
+      if (!tab)
+        throw new Error('--tab is required');
+      await addSection(reportDir, tab, flags, {});
+      return;
+    }
+    case 'remove-section': {
+      const tab = stringFlag(flags, 'tab');
+      const id = stringFlag(flags, 'id');
+      if (!tab || !id)
+        throw new Error('--tab and --id are required');
+      console.log(await removeSection(reportDir, tab, id) ? `Removed section "${id}".` : `Section "${id}" not found.`);
+      return;
+    }
     case 'remove-tab': {
       const id = stringFlag(flags, 'id');
       if (!id)
@@ -161,21 +225,33 @@ async function main() {
       const tabs = await readTabs(reportDir);
       if (!tabs.length)
         console.log('No extra tabs.');
-      for (const tab of tabs)
+      for (const tab of tabs) {
         console.log(`${tab.id}\t${tab.format}\t${tab.title}${tab.badge !== undefined ? `\t[${tab.badge}]` : ''}`);
+        for (const section of tab.sections || [])
+          console.log(`  - ${section.id}\t${section.title}`);
+      }
       return;
     }
     case 'show': {
       const port = stringFlag(flags, 'port');
-      const ai = flags.has('ai') || flags.has('ai-mock') ? aiOptionsFromEnv(flags.has('ai-mock')) : undefined;
-      await showReport(reportDir, { host: stringFlag(flags, 'host'), port: port ? +port : undefined, open: !flags.has('no-open'), ai });
+      const withAi = flags.has('ai') || flags.has('ai-mock');
+      const repoDir = stringFlag(flags, 'repo');
+      const agent = withAi ? new AgentService({ llm: llmConfigFromEnv({ mock: flags.has('ai-mock') }), reportDir, repo: repoDir ? new Repo(repoDir, stringFlag(flags, 'config')) : undefined }) : undefined;
+      await showReport(reportDir, { host: stringFlag(flags, 'host'), port: port ? +port : undefined, open: !flags.has('no-open'), agent });
+      return;
+    }
+    case 'agent': {
+      const port = stringFlag(flags, 'port');
+      const repo = new Repo(stringFlag(flags, 'repo') || process.cwd(), stringFlag(flags, 'config'));
+      const agent = new AgentService({ llm: llmConfigFromEnv({ mock: flags.has('ai-mock') }), reportDir, repo });
+      await showReport(reportDir, { host: stringFlag(flags, 'host'), port: port ? +port : undefined, open: !flags.has('no-open'), agent });
       return;
     }
     case 'ai-gateway': {
       const port = stringFlag(flags, 'port');
-      const ai = aiOptionsFromEnv(flags.has('ai-mock'));
-      const gateway = await startAiGateway(ai, { host: stringFlag(flags, 'host'), port: port ? +port : undefined });
-      console.log(`AI gateway listening: ${gateway.url} (${ai.mode === 'mock' ? 'mock answers' : `${ai.model} via ${ai.baseUrl}`})`);
+      const agent = new AgentService({ llm: llmConfigFromEnv({ mock: flags.has('ai-mock') }), corsOrigin: process.env.EXTENDED_REPORT_AI_CORS_ORIGIN || '*' });
+      const gateway = await startAiGateway(agent, { host: stringFlag(flags, 'host'), port: port ? +port : undefined });
+      console.log(`AI agent gateway: ${gateway.url}api/agent/ (${agent.status().model}). Analysis only.`);
       await new Promise(() => {});
       return;
     }

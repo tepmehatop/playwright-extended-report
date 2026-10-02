@@ -24,6 +24,20 @@ export type ExtendedTabIcon = 'sparkle' | 'bug' | 'graph' | 'note' | 'list' | 'n
 
 export type ExtendedTabBadgeKind = 'default' | 'danger' | 'attention' | 'success';
 
+/** A titled block inside a tab, e.g. the skill's analysis inside "Failure analysis". */
+export type ExtendedTabSection = {
+  /** Unique within the tab. */
+  id: string;
+  title: string;
+  format: 'markdown' | 'html';
+  content: string;
+  /** Sections are sorted by `order`, then by insertion. */
+  order?: number;
+  description?: string;
+  generatedAt?: string;
+  source?: string;
+};
+
 export type ExtendedTab = {
   /** Stable id, used in the URL: `#?tab=<id>`. Letters, digits, `-` and `_`. */
   id: string;
@@ -43,6 +57,10 @@ export type ExtendedTab = {
   generatedAt?: string;
   /** Free-form origin, e.g. "jenkins-log-skill" or a file name. */
   source?: string;
+  /** Extra blocks rendered after `content` (markdown / html tabs only). */
+  sections?: ExtendedTabSection[];
+  /** Shown when the tab has no section with this id yet, e.g. how to add the skill analysis. */
+  placeholders?: { sectionId: string, title: string, order?: number, markdown: string }[];
 };
 
 export type ExtendedTabsPayload = {
@@ -67,7 +85,20 @@ export function validateTab(tab: ExtendedTab): string | undefined {
     return `tab "${tab.id}": format must be one of markdown, html, iframe, insights`;
   if (typeof tab.content !== 'string')
     return `tab "${tab.id}": content must be a string`;
+  for (const section of tab.sections || []) {
+    if (typeof section.id !== 'string' || !kTabIdRegex.test(section.id))
+      return `tab "${tab.id}": invalid section id "${section.id}"`;
+    if (!['markdown', 'html'].includes(section.format) || typeof section.content !== 'string')
+      return `tab "${tab.id}": section "${section.id}" must have markdown or html content`;
+  }
   return undefined;
+}
+
+export function sortSections(sections: ExtendedTabSection[]): ExtendedTabSection[] {
+  return sections
+      .map((section, index) => ({ section, index }))
+      .sort((a, b) => (a.section.order ?? 0) - (b.section.order ?? 0) || a.index - b.index)
+      .map(e => e.section);
 }
 
 export function sortTabs(tabs: ExtendedTab[]): ExtendedTab[] {

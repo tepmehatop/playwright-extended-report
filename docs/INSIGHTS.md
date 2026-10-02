@@ -30,23 +30,30 @@
 | Браузер или страница упали / закрылись | Environment | medium |
 | Необработанное исключение в приложении (`pageerror`) | Product bug | high |
 | Расхождение скриншота или ARIA-снапшота | UI change | high |
+| Элемент не найден, а **страница на момент падения пустая** | Unclassified: «смотрите, что случилось до — навигация, редирект, submit, страница не отрисовалась», а не локатор | medium |
 | Элемент не найден, strict mode violation | Test bug (+ пометка, если падение новое) | medium |
 | Элемент найден, но значение другое (`Expected` / `Received`) | Product bug | medium / low |
 | Таймаут теста | Environment | low |
 | Иначе | Unclassified | low |
 
 Каждое решение сопровождается **reason** (одно предложение) и **evidence** (на чём основано),
-чтобы человек мог быстро проверить вывод. Уточнять классификацию должна LLM через Ask AI.
+чтобы человек мог быстро проверить вывод. Уточнять классификацию должен AI-агент (Ask AI).
 Правила легко дополнять своими: например, «URL содержит `/auth` и статус 401 — Environment: истёк тестовый пользователь».
 
-## 2. История прогонов
+## 2. История прогонов (по умолчанию выключена)
+
+Без истории всё остальное работает: классификация, сеть и консоль, **сравнение попыток (ретраев) внутри
+текущего прогона**, агент. История нужна только для сигналов «между прогонами» — новые и известные падения,
+нестабильные тесты, регрессии длительности. Если у вас прошлые прогоны хранятся в TestOps, историю здесь
+можно не включать. Чтобы включить:
 
 После каждого прогона в `extended-report-history.json` (рядом с папкой отчёта) дописывается строка
 с исходом и длительностью каждого теста. Хранятся последние 30 прогонов. Копия кладётся в отчёт как `history.json`.
 
 ```ts
 ['playwright-extended-report', {
-  insights: { history: { file: 'reports/history.json', maxRuns: 50 } },   // или history: false
+  insights: { history: {} },                                              // файл по умолчанию
+  // insights: { history: { file: 'reports/history.json', maxRuns: 50 } },
 }]
 ```
 
@@ -76,7 +83,8 @@ withEnv(['EXTENDED_REPORT_HISTORY_FILE=/var/lib/qa-history/regression.json']) { 
 
 ## 3. Сравнение попыток
 
-Кнопка **Compare attempts** (если было больше одной попытки). Слева упавшая попытка, справа успешная
+Сравниваются **попытки одного теста внутри текущего прогона** (первый запуск и ретраи, `retries` в конфиге),
+история не нужна. Кнопка **Compare attempts** появляется, если было больше одной попытки. Слева упавшая попытка, справа успешная
 (для flaky) или предыдущая. Подсвечиваются: шаг, где попытки разошлись; шаг с ошибкой; шаги, ставшие
 в 2+ раза медленнее. Ниже — скриншоты обеих попыток. Если все попытки упали с одной ошибкой, это сказано
 явно: стабильное падение, а не flaky.
@@ -89,37 +97,25 @@ withEnv(['EXTENDED_REPORT_HISTORY_FILE=/var/lib/qa-history/regression.json']) { 
 
 ## 6. Ask AI и Fix
 
-**Ask AI** собирает промпт: тест, классификация, ошибка, сеть, консоль, история и `error-context`
-(снапшот страницы и код теста), затем:
+Это AI-агент: глубокий анализ по трейсу, локальный перезапуск, предложение правки с диффом, применение
+с проверкой и откат, а также поле «подсказка агенту». Кнопки есть в карточках Insights и на странице
+каждого упавшего теста. Подробности и подключение внутренних моделей (Proxy LLM, GigaChat, GigaCode IFT SSL,
+GigaCode CLI) описаны в **[AGENT.md](AGENT.md)**.
 
-- если задан `insights.aiEndpoint` / `EXTENDED_REPORT_AI_ENDPOINT`, отправляет `POST {prompt, test}` туда
-  и показывает Markdown-ответ прямо в карточке;
-- если отчёт открыт через `pw-extended-report show --ai`, использует встроенный шлюз;
-- иначе показывает промпт и кнопку **Copy prompt** — для чата или IDE-агента.
-
-Шлюз (`src/aiGateway.ts`) умеет говорить с любым **OpenAI-совместимым** API: OpenAI, vLLM, Ollama, LiteLLM,
-внутренний gateway.
+Коротко:
 
 ```bash
-export EXTENDED_REPORT_AI_BASE_URL=http://llm.internal/v1     # по умолчанию https://api.openai.com/v1
-export EXTENDED_REPORT_AI_API_KEY=...                         # не нужен для внутренней модели без ключа
-export EXTENDED_REPORT_AI_MODEL=qwen2.5-coder-32b
-export EXTENDED_REPORT_AI_LANGUAGE=Russian
-npx pw-extended-report show extended-report --ai               # локально
-npx pw-extended-report ai-gateway --port 8787                  # постоянный шлюз с CORS для отчётов в Jenkins
+cd my-autotests
+export EXTENDED_REPORT_AI_PROVIDER=gigachat GIGACHAT_AUTHORIZATION_KEY=... EXTENDED_REPORT_AI_LANGUAGE=Russian
+npx pw-extended-report agent ./extended-report
 ```
 
-Для отчётов, опубликованных в Jenkins: поднимите `ai-gateway` на внутреннем хосте и задайте при прогоне
-`EXTENDED_REPORT_AI_ENDPOINT=http://ai-gw.internal:8787/api/ai/ask`. В CSP Jenkins должен быть разрешён
-`connect-src` на этот хост. Свой шлюз должен принимать `POST {prompt, test}` и отвечать `{markdown, model?}`
-(типы `AskAiRequest` и `AskAiResponse` в [`src/shared/insightsFormat.ts`](../src/shared/insightsFormat.ts)).
-
-Для демо без модели: `pw-extended-report show --ai-mock` (ответы явно помечены как mock).
+Без агента кнопка Ask AI показывает готовый промпт с кнопкой **Copy prompt**.
 
 **Fix ▾**:
-- **Copy prompt for healer agent** — промпт для `playwright-test-healer` (Claude Code / VS Code / OpenCode;
-  один раз выполнить `npx playwright init-agents --loop=claude` в репозитории тестов). Промпт запрещает
-  ослаблять проверки, если это баг продукта или окружения.
+- **Propose fix with AI agent** — правка с диффом, затем Apply & verify и Revert (см. AGENT.md).
+- **Copy fix prompt** — готовый промпт для любого LLM-чата или IDE-агента. Запрещает ослаблять проверки,
+  если это баг продукта или окружения.
 - **Copy rerun command** — `npx playwright test "file:line" --project=… --retries=0 --trace=on`.
 - **Run fix job ↗** — если задан `insights.fixUrlTemplate` / `EXTENDED_REPORT_FIX_URL`, например
   `https://jenkins/job/heal-test/buildWithParameters?TEST={file}:{line}&PROJECT={project}`.

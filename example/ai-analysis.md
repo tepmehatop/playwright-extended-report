@@ -1,7 +1,8 @@
 # Анализ прогона (пример вывода скилла)
 
 > Этот файл имитирует MD, который готовит скилл анализа логов Jenkins.
-> Его подключают командой `pw-extended-report add-tab --id ai --file ai-analysis.md`.
+> Его подключают командой `pw-extended-report add-analysis --file ai-analysis.md`:
+> он появляется во вкладке **Failure analysis** над автоматической группировкой.
 
 ## Итоги
 
@@ -49,4 +50,4 @@ Error: element(s) not found
 - [ ] Проверить формулу расчёта итоговой суммы.
 - [ ] Добавить ожидание загрузки виджета оплаты.
 
-Быстрые фильтры: [все упавшие](#?q=s:failed) · [flaky](#?q=s:flaky) · [вкладка Failure analysis](#?tab=failures)
+Быстрые фильтры: [все упавшие](#?q=s:failed) · [flaky](#?q=s:flaky) · [вкладка Insights](#?tab=insights)

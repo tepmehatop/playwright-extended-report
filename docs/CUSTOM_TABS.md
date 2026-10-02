@@ -1,6 +1,19 @@
 # Свои вкладки
 
-## Три способа добавить вкладку
+## Анализ скилла — во вкладку Failure analysis
+
+Для вывода вашего скилла отдельная вкладка не нужна: он ложится секцией во встроенную Failure analysis,
+над автоматической группировкой ошибок.
+
+```bash
+npx pw-extended-report add-analysis extended-report --file analysis.md --source "jenkins-log-skill #123"
+```
+
+Секции можно добавлять в любую Markdown/HTML-вкладку: `add-section --tab <tab-id> --id <id> --title ... --file ...`
+(повтор с тем же id заменяет секцию), удалять — `remove-section`. Программно: `upsertSection(reportDir, tabId, {...})`.
+На этапе генерации: `failureClusters: { sections: [{ id: 'skill', title: 'Skill analysis', file: './analysis.md', optional: true }] }`.
+
+## Три способа добавить свою вкладку
 
 1. **CLI после прогона**: основной сценарий для Jenkins.
    ```bash

@@ -93,7 +93,7 @@ export type InsightsData = {
     regressions: DurationRegression[];
   };
   ai?: {
-    /** POST endpoint for "Ask AI". Relative URLs are resolved against the report. */
+    /** Base URL of the agent gateway (pw-extended-report ai-gateway). Empty: the server that serves the report. */
     endpoint?: string;
   };
   fix?: {

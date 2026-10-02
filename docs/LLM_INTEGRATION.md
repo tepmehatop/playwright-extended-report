@@ -1,5 +1,8 @@
 # Подключение LLM и скилла анализа
 
+> Для разбора **отдельных** упавших тестов в отчёте есть встроенный AI-агент с поддержкой GigaChat, GigaCode
+> и Proxy LLM: см. [AGENT.md](AGENT.md). Этот документ — про анализ **прогона целиком** вашим скиллом.
+
 Пакет не вызывает LLM сам. Это сделано сознательно: в закрытом контуре своя модель, свои ключи
 и свои правила передачи данных. Пакет готовит **входные данные** и **точку вывода** (вкладку).
 
@@ -11,7 +14,7 @@ playwright test ──► extended-report/
                                                 ▼
                                ваш скилл / LLM ──► analysis.md
                                                 ▼
-                     pw-extended-report add-tab --id ai --file analysis.md
+                     pw-extended-report add-analysis --file analysis.md
 ```
 
 ## Входные данные
@@ -76,7 +79,7 @@ playwright test ──► extended-report/
 ```ts
 // tools/ai-analyze.ts — запуск: npx tsx tools/ai-analyze.ts
 import fs from 'fs';
-import { upsertTab } from 'playwright-extended-report';
+import { upsertSection } from 'playwright-extended-report';
 
 const summary = JSON.parse(fs.readFileSync('extended-report/report-summary.json', 'utf-8'));
 if (!summary.failedTests.length)
@@ -91,10 +94,10 @@ const context = summary.clusters.slice(0, 10).map((c: any) => {
 
 const markdown = await callYourLLM(PROMPT, JSON.stringify({ stats: summary.stats, clusters: context }));  // ваша модель
 
-await upsertTab('extended-report', {
-  id: 'ai', title: 'AI анализ', icon: 'sparkle', order: 10,
+// Во вкладку Failure analysis, секцией над автоматической группировкой.
+await upsertSection('extended-report', 'failures', {
+  id: 'skill', title: 'Skill analysis', order: 10,
   content: markdown, source: 'internal-llm', generatedAt: new Date().toISOString(),
-  badge: summary.clusters.length, badgeKind: 'danger',
 });
 ```
 
@@ -106,12 +109,6 @@ await upsertTab('extended-report', {
 
 ## «Агент по клику» в отчёте
 
-Отчёт — статический файл, ключей LLM в нём быть не должно. Варианты, от простого к сложному:
-
-1. **Уже работает**: кнопка «Copy prompt» в каждом упавшем тесте копирует контекст, дальше его вставляют в чат или IDE-агент.
-2. **Ссылка на внутренний сервис**: во вкладке AI-анализа генерируйте ссылки вида
-   `https://ai-gateway.internal/analyze?build=123&test=<testId>`. Сервис забирает `report-summary.json`
-   и error-context из артефактов Jenkins и отвечает. Ключи остаются на сервере.
-3. **Кнопка в UI**: новый компонент в `web/src/extended/`, который делает `fetch` к внутреннему
-   gateway (URL задаётся опцией репортёра) и показывает ответ инлайн. Потребуется CORS на gateway и
-   разрешение `connect-src` в CSP Jenkins. Подробнее — в IDEAS.md.
+Реализован: кнопки **Ask AI** и **Fix ▾** в карточках Insights и на странице каждого упавшего теста.
+Агент сам читает трейс, перезапускает тест, предлагает и применяет правку. Ключи модели остаются в процессе
+`pw-extended-report agent` / `ai-gateway`, в отчёт не попадают. Подробнее: [AGENT.md](AGENT.md).

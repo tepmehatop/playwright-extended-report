@@ -7,11 +7,23 @@
 import fs from 'fs';
 import path from 'path';
 
-import { kTabsTemplateClose, kTabsTemplateOpen, sortTabs, validateTab } from './shared/tabsFormat';
+import { kTabsTemplateClose, kTabsTemplateOpen, sortSections, sortTabs, validateTab } from './shared/tabsFormat';
 
-import type { ExtendedTab, ExtendedTabBadgeKind, ExtendedTabFormat, ExtendedTabIcon, ExtendedTabsPayload } from './shared/tabsFormat';
+import type { ExtendedTab, ExtendedTabBadgeKind, ExtendedTabFormat, ExtendedTabIcon, ExtendedTabSection, ExtendedTabsPayload } from './shared/tabsFormat';
 
-export type { ExtendedTab, ExtendedTabBadgeKind, ExtendedTabFormat, ExtendedTabIcon, ExtendedTabsPayload } from './shared/tabsFormat';
+export type { ExtendedTab, ExtendedTabBadgeKind, ExtendedTabFormat, ExtendedTabIcon, ExtendedTabSection, ExtendedTabsPayload } from './shared/tabsFormat';
+
+/** Built-in tab that merges the automatic error grouping with your own (skill / LLM) analysis. */
+export const kFailureAnalysisTabId = 'failures';
+/** Section id used by `add-analysis` for the skill output. */
+export const kSkillSectionId = 'skill';
+
+export type ExtendedTabSectionInput = Omit<ExtendedTabSection, 'content' | 'format'> & {
+  format?: 'markdown' | 'html';
+  content?: string;
+  file?: string;
+  optional?: boolean;
+};
 
 /** A tab whose content comes from a file (Markdown, HTML, or a folder for iframe tabs). */
 export type ExtendedTabInput = Omit<ExtendedTab, 'content' | 'format'> & {
@@ -90,6 +102,51 @@ export async function upsertTab(reportDir: string, input: ExtendedTabInput): Pro
   tabs.push(tab);
   await writeTabs(reportDir, tabs);
   return tab;
+}
+
+/** Adds a section to an existing tab, or replaces the section with the same id. */
+export async function upsertSection(reportDir: string, tabId: string, input: ExtendedTabSectionInput): Promise<ExtendedTabSection | undefined> {
+  const tabs = await readTabs(reportDir);
+  const tab = tabs.find(t => t.id === tabId);
+  if (!tab)
+    throw new Error(`tab "${tabId}" not found in the report (available: ${tabs.map(t => t.id).join(', ') || 'none'})`);
+  if (tab.format !== 'markdown' && tab.format !== 'html')
+    throw new Error(`tab "${tabId}" has format "${tab.format}"; sections are supported in markdown and html tabs only`);
+  const section = await resolveSectionInput(input);
+  if (!section)
+    return undefined;
+  tab.sections = sortSections([...(tab.sections || []).filter(s => s.id !== section.id), section]);
+  await writeTabs(reportDir, tabs);
+  return section;
+}
+
+export async function removeSection(reportDir: string, tabId: string, sectionId: string): Promise<boolean> {
+  const tabs = await readTabs(reportDir);
+  const tab = tabs.find(t => t.id === tabId);
+  if (!tab?.sections?.some(s => s.id === sectionId))
+    return false;
+  tab.sections = tab.sections.filter(s => s.id !== sectionId);
+  await writeTabs(reportDir, tabs);
+  return true;
+}
+
+export async function resolveSectionInput(input: ExtendedTabSectionInput): Promise<ExtendedTabSection | undefined> {
+  const { file, optional, content, format, ...rest } = input;
+  if (content !== undefined)
+    return { ...rest, format: format ?? 'markdown', content };
+  if (!file)
+    throw new Error(`section "${input.id}": either "content" or "file" is required`);
+  if (!fs.existsSync(file)) {
+    if (optional)
+      return undefined;
+    throw new Error(`section "${input.id}": file not found: ${file}`);
+  }
+  return {
+    source: path.basename(file),
+    ...rest,
+    format: format ?? (formatFromExtension(file) === 'html' ? 'html' : 'markdown'),
+    content: await fs.promises.readFile(file, 'utf-8'),
+  };
 }
 
 export async function removeTab(reportDir: string, id: string): Promise<boolean> {

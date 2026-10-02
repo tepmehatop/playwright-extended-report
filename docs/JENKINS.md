@@ -23,9 +23,8 @@ pipeline {
         // 1. Ваш скилл анализа логов -> analysis.md
         //    На вход можно дать extended-report/report-summary.json (см. LLM_INTEGRATION.md)
         sh 'node tools/jenkins-log-skill.js --out analysis.md || true'
-        // 2. Прицепить результат вкладкой (--optional: если скилл ничего не создал, не падаем)
-        sh '''npx pw-extended-report add-tab extended-report \
-              --id ai --title "AI анализ" --icon sparkle --order 10 \
+        // 2. Положить результат во вкладку Failure analysis (--optional: если скилл ничего не создал, не падаем)
+        sh '''npx pw-extended-report add-analysis extended-report \
               --source "jenkins-log-skill #${BUILD_NUMBER}" \
               --file analysis.md --optional'''
       }

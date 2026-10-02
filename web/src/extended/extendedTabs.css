@@ -216,3 +216,20 @@
 .header-view-status-container + .subnav-search {
   min-width: 280px;
 }
+
+.extended-section {
+  margin-top: 16px;
+}
+
+.extended-section .chip {
+  margin: 0;
+}
+
+.extended-tab-toolbar.compact {
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+}
+
+.extended-section-placeholder {
+  color: var(--color-fg-muted);
+}

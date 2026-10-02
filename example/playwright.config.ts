@@ -17,6 +17,8 @@ export default defineConfig({
     [require.resolve('../dist/reporter/index.js'), {
       outputFolder: './extended-report',
       title: 'Demo run',
+      // Cross-run history is opt-in: the file must survive between CI builds.
+      insights: { history: {} },
       tabs: [
         // Tabs can be attached at generation time when the file already exists.
         // The Jenkins log analysis is usually attached later with `pw-extended-report add-tab`.

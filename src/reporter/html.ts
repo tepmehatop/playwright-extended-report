@@ -36,12 +36,13 @@ import { codeFrameColumns } from '@babel/code-frame';
 import { calculateSha1, copyFileAndMakeWritable, extensionForContentType, formatError, formatResultFailure, MultiMap, removeFolders, resolveReporterOutputPath, sanitizeForFilePath, stripAnsiEscapes, toPosixPath } from './compat';
 import { clusterFailures, collectFailedTests, renderClustersMarkdown } from './failureClusters';
 import { buildInsights } from './insights';
-import { encodeTabs, resolveTabInput } from '../tabs';
+import { encodeTabs, kFailureAnalysisTabId, kSkillSectionId, resolveSectionInput, resolveTabInput } from '../tabs';
 import { showReport } from '../server';
 import { sortTabs } from '../shared/tabsFormat';
 
 import type { ExtendedTab } from '../shared/tabsFormat';
-import type { ExtendedTabInput } from '../tabs';
+import type { ExtendedTabInput, ExtendedTabSectionInput } from '../tabs';
+import type { ExtendedTabSection } from '../shared/tabsFormat';
 import type { FailureCluster, FailedTestInfo } from './failureClusters';
 import type { InsightsData } from '../shared/insightsFormat';
 import type { HTMLReport, HTMLReportOptions, Location, Stats, TestAttachment, TestCase, TestCaseSummary, TestFile, TestFileSummary, TestResult, TestStep } from '../../web/src/types';
@@ -76,7 +77,14 @@ export type ExtendedReporterOptions = {
   /** Extra tabs to embed at generation time. Files that do not exist yet can be marked `optional`. */
   tabs?: ExtendedTabInput[];
   /** Built-in "Failures" tab with failed tests grouped by error. Default: true. */
-  failureClusters?: boolean | { title?: string, order?: number };
+  failureClusters?: boolean | {
+    title?: string;
+    order?: number;
+    /** Intro text (Markdown) at the top of the tab. */
+    description?: string;
+    /** Extra sections available at generation time, e.g. `{ id: 'skill', title: 'Skill analysis', file: './analysis.md', optional: true }`. */
+    sections?: ExtendedTabSectionInput[];
+  };
   /** Write report-summary.json (stats, failures, clusters) for LLM / scripts. Default: true. */
   summaryJson?: boolean;
   /**
@@ -86,11 +94,15 @@ export type ExtendedReporterOptions = {
   insights?: boolean | {
     title?: string;
     order?: number;
-    /** Run history. Default file: `extended-report-history.json` next to the report folder. Env: EXTENDED_REPORT_HISTORY_FILE. */
+    /**
+     * Cross-run history (new vs known failures, unstable tests, duration regressions). Off by default:
+     * pass `{}` (file: `extended-report-history.json` next to the report folder) or set EXTENDED_REPORT_HISTORY_FILE.
+     * The file must be kept between CI builds.
+     */
     history?: false | { file?: string, maxRuns?: number };
     /** Read trace.zip of failed tests for network / console errors. Default: true. */
     traces?: boolean;
-    /** POST endpoint for "Ask AI" (see docs/INSIGHTS.md). Env: EXTENDED_REPORT_AI_ENDPOINT. */
+    /** Base URL of a running `pw-extended-report ai-gateway`, e.g. http://ai-gw:8787/ (docs/AGENT.md). Env: EXTENDED_REPORT_AI_ENDPOINT. */
     aiEndpoint?: string;
     /** URL template for "Fix" with {file} {line} {title} {project} {testId}. Env: EXTENDED_REPORT_FIX_URL. */
     fixUrlTemplate?: string;
@@ -233,19 +245,45 @@ class ExtendedHtmlReporter implements api.Reporter {
 
     const clustersOption = this._options.failureClusters ?? true;
     if (clustersOption) {
+      const o = typeof clustersOption === 'object' ? clustersOption : {};
       const failedCount = stats.unexpected + stats.flaky;
+      const sections: ExtendedTabSection[] = [{
+        id: 'auto',
+        title: 'Automatic error grouping',
+        description: 'Built-in, no AI: failed and flaky tests grouped by normalized error message.',
+        format: 'markdown',
+        order: 100,
+        source: 'playwright-extended-report',
+        generatedAt: new Date().toISOString(),
+        content: renderClustersMarkdown(clusters, stats),
+      }];
+      for (const input of o.sections || []) {
+        try {
+          const section = await resolveSectionInput(input.file ? { ...input, file: path.resolve(this._options.configDir ?? process.cwd(), input.file) } : input);
+          if (section)
+            sections.push(section);
+        } catch (e) {
+          writeLine(red(`Extended report: failed to add section "${input.id}": ${e.message}`));
+        }
+      }
       tabs.push({
-        id: 'failures',
-        title: (typeof clustersOption === 'object' && clustersOption.title) || 'Failure analysis',
+        id: kFailureAnalysisTabId,
+        title: o.title || 'Failure analysis',
         icon: 'bug',
         format: 'markdown',
-        order: (typeof clustersOption === 'object' && clustersOption.order) || 100,
+        order: o.order ?? 100,
         badge: failedCount ? clusters.length : undefined,
         badgeKind: stats.unexpected ? 'danger' : 'attention',
-        description: 'Failed and flaky tests grouped by normalized error message.',
         generatedAt: new Date().toISOString(),
         source: 'playwright-extended-report',
-        content: renderClustersMarkdown(clusters, stats),
+        content: o.description ?? kFailureAnalysisIntro,
+        sections,
+        placeholders: [{
+          sectionId: kSkillSectionId,
+          title: 'Skill analysis',
+          order: 10,
+          markdown: 'The analysis from your log-analysis skill / LLM has not been added to this report yet. Add it after the run:\n\n```bash\nnpx pw-extended-report add-analysis extended-report --file analysis.md\n```',
+        }],
       });
     }
 
@@ -267,8 +305,9 @@ class ExtendedHtmlReporter implements api.Reporter {
       const o = typeof insightsOption === 'object' ? insightsOption : {};
       const historyFile = o.history === false ? false : process.env.EXTENDED_REPORT_HISTORY_FILE
         ? path.resolve(process.env.EXTENDED_REPORT_HISTORY_FILE)
-        : o.history?.file ? path.resolve(this._options.configDir ?? process.cwd(), o.history.file)
-          : path.join(path.dirname(this._outputFolder), 'extended-report-history.json');
+        : !o.history ? false
+          : o.history.file ? path.resolve(this._options.configDir ?? process.cwd(), o.history.file)
+            : path.join(path.dirname(this._outputFolder), 'extended-report-history.json');
       try {
         const built = await buildInsights(this.suite, this.config.rootDir, result, {
           historyFile,
@@ -336,6 +375,15 @@ class ExtendedHtmlReporter implements api.Reporter {
       await showReport(this._outputFolder, { host: this._host, port: this._port, testId: singleTestId });
   }
 }
+
+const kFailureAnalysisIntro = [
+  'One place for everything known about the failures of this run:',
+  '',
+  '1. **Skill analysis** — the output of your log-analysis skill / LLM (repeated errors across tests, root causes, recommendations), added after the run with `pw-extended-report add-analysis`.',
+  '2. **Automatic error grouping** — built into the report, no AI: failed and flaky tests grouped by normalized error message, with failure rate and the line that throws most often.',
+  '',
+  'Per-test classification, network / console errors from traces and the AI agent are in the **Insights** tab.',
+].join('\n');
 
 function parseBooleanEnvVar(name: string): boolean | undefined {
   const value = process.env[name];

@@ -11,3 +11,4 @@ tests/.output/
 .DS_Store
 example/extended-report-history.json
 extended-report-history.json
+tests/.output-agent/

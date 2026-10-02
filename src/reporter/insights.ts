@@ -13,7 +13,7 @@ import path from 'path';
 
 import { stripAnsiEscapes, toPosixPath } from './compat';
 import { appendRun, durationRegression, isIntermittent, loadHistory, saveHistory, testHistory } from './history';
-import { readTraceIssues } from './traceInsights';
+import { readTrace } from '../agent/trace';
 
 import type { HistoryFile, HistoryRun } from './history';
 import type { Classification, ConsoleIssue, HistoryOutcome, InsightsData, InsightTest, NetworkIssue, TestHistory } from '../shared/insightsFormat';
@@ -89,10 +89,15 @@ export async function buildInsights(suite: Suite, rootDir: string, result: FullR
 
     let network: NetworkIssue[] = [];
     let consoleIssues: ConsoleIssue[] = [];
+    let page: PageState | undefined;
     const trace = failed?.attachments.find(a => a.name === 'trace' && a.path);
     if (options.traces && trace?.path) {
       try {
-        ({ network, console: consoleIssues } = await readTraceIssues(trace.path));
+        const data = await readTrace(trace.path);
+        network = data.network.slice(0, 20);
+        consoleIssues = data.console.slice(0, 20);
+        if (data.dom)
+          page = { url: data.dom.url, isBlank: data.dom.isBlank };
       } catch {
       }
     }
@@ -112,7 +117,7 @@ export async function buildInsights(suite: Suite, rootDir: string, result: FullR
       history: h,
       attempts: test.results.length,
     };
-    item.classification = classify(item, failed?.status);
+    item.classification = classify(item, failed?.status, page);
     tests.push(item);
   }
 
@@ -150,7 +155,9 @@ const kCrashText = /Target (page, context or browser )?(has been )?closed|Browse
 const kNotFoundText = /element\(s\) not found|resolved to 0 elements|waiting for (locator|getBy|selector)|strict mode violation|element is not attached|element is outside of the viewport/i;
 const kSnapshotText = /toHaveScreenshot|Screenshot comparison failed|pixels \(ratio|snapshot doesn't exist|toMatchSnapshot|toMatchAriaSnapshot/;
 
-export function classify(test: Pick<InsightTest, 'outcome' | 'error' | 'network' | 'console' | 'history' | 'attempts'>, status?: string): Classification {
+export type PageState = { url: string, isBlank: boolean };
+
+export function classify(test: Pick<InsightTest, 'outcome' | 'error' | 'network' | 'console' | 'history' | 'attempts'>, status?: string, page?: PageState): Classification {
   const error = test.error ?? '';
   const firstLine = error.split('\n').find(l => l.trim())?.trim() ?? '';
   const locator = error.match(/^Locator: (.+)$/m)?.[1];
@@ -211,6 +218,14 @@ export function classify(test: Pick<InsightTest, 'outcome' | 'error' | 'network'
   }
   if (kSnapshotText.test(error)) {
     return { kind: 'ui-change', reason: 'Visual / ARIA snapshot differs from the baseline: either an intended UI change (update baselines) or a regression.', evidence: withHistory([firstLine]), confidence: 'high' };
+  }
+  if (kNotFoundText.test(error) && page?.isBlank) {
+    return {
+      kind: 'unknown',
+      reason: `The page was empty when the test failed (URL: ${page.url}), so no locator could match. Look at what happened before: an unexpected navigation, redirect, form submit or a page that did not render — not at the locator.`,
+      evidence: withHistory([firstLine, `page at failure: blank, ${page.url}`]),
+      confidence: 'medium',
+    };
   }
   if (kNotFoundText.test(error)) {
     const isNew = h?.isNewFailure;

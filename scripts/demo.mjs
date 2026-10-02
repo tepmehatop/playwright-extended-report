@@ -3,8 +3,8 @@
  * Live demo: runs the example project 5 times to build up history, attaches a
  * sample "AI analysis" tab and opens the report with mock "Ask AI".
  *
- *   npm run demo              # mock AI answers
- *   npm run demo -- --ai      # real model, see EXTENDED_REPORT_AI_* in README
+ *   npm run demo              # template AI answers (no model needed)
+ *   npm run demo -- --ai      # real model, configured via env (docs/AGENT.md)
  */
 
 import { spawnSync, spawn } from 'node:child_process';
@@ -36,8 +36,10 @@ for (let run = 1; run <= runs; run++) {
   console.log(summary.join(', '));
 }
 
-spawnSync(process.execPath, [cli, 'add-tab', 'example/extended-report', '--id', 'ai', '--title', 'AI анализ', '--icon', 'note',
-  '--order', '10', '--source', 'jenkins-log-skill (sample)', '--file', 'example/ai-analysis.md'], { cwd: root, stdio: 'inherit' });
+spawnSync(process.execPath, [cli, 'add-analysis', 'example/extended-report', '--source', 'jenkins-log-skill (sample)', '--file', 'example/ai-analysis.md'], { cwd: root, stdio: 'inherit' });
 
-const aiFlag = process.argv.includes('--ai') ? '--ai' : '--ai-mock';
-spawn(process.execPath, [cli, 'show', 'example/extended-report', aiFlag, '--port', '9324'], { cwd: root, stdio: 'inherit' });
+// Agent mode: analysis + local re-run + fixes in this repository (example/ is the "tests repo").
+const args = [cli, 'agent', 'example/extended-report', '--repo', root, '--config', 'example/playwright.config.ts', '--port', '9324'];
+if (!process.argv.includes('--ai'))
+  args.push('--ai-mock');
+spawn(process.execPath, args, { cwd: root, stdio: 'inherit' });

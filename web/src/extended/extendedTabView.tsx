@@ -6,6 +6,7 @@ import { Link, navigate, useSearchParams } from '../links';
 import type { LoadedReport } from '../loadedReport';
 import type { TestCaseSummary } from '../types';
 import { extendedTabs, findExtendedTab, type ExtendedTab } from './extendedTabs';
+import { sortSections } from '../../../src/shared/tabsFormat';
 import { tabIcon } from './icons';
 import { renderMarkdown, sanitizeHtml, slugify } from './markdown';
 import { InsightsView } from './insights/insightsView';
@@ -44,48 +45,76 @@ export const ExtendedTabView: React.FC<{
   }
   return <div className='extended-tab' data-testid={`extended-tab-${tab.id}`}>
     <AutoChip header={<span className='extended-tab-header'>{tabIcon(tab.icon)}{tab.title}</span>} dataTestId='extended-tab-chip'>
-      <TabToolbar tab={tab} />
       <TabContent tab={tab} report={report} />
     </AutoChip>
   </div>;
 };
 
-const TabToolbar: React.FC<{ tab: ExtendedTab }> = ({ tab }) => {
+type Exportable = { id: string, title: string, format: string, content: string, description?: string, generatedAt?: string, source?: string };
+
+const TabToolbar: React.FC<{ item: Exportable, compact?: boolean }> = ({ item, compact }) => {
   const [copied, setCopied] = React.useState(false);
-  const canExport = tab.format === 'markdown' || tab.format === 'html';
+  const canExport = item.format === 'markdown' || item.format === 'html';
   const meta = [
-    tab.generatedAt && `Generated: ${formatDate(tab.generatedAt)}`,
-    tab.source && `Source: ${tab.source}`,
+    item.generatedAt && `Generated: ${formatDate(item.generatedAt)}`,
+    item.source && `Source: ${item.source}`,
   ].filter(Boolean).join(' · ');
-  if (!tab.description && !meta && !canExport)
+  if (!item.description && !meta && !canExport)
     return null;
-  return <div className='extended-tab-toolbar'>
+  return <div className={clsx('extended-tab-toolbar', compact && 'compact')}>
     <div className='extended-tab-meta'>
-      {tab.description && <div className='extended-tab-description'>{tab.description}</div>}
+      {item.description && <div className='extended-tab-description'>{item.description}</div>}
       {meta && <div>{meta}</div>}
     </div>
     <div style={{ flex: 'auto' }}></div>
     {canExport && <>
       <button className='button' onClick={async () => {
-        await navigator.clipboard.writeText(tab.content);
+        await navigator.clipboard.writeText(item.content);
         setCopied(true);
         setTimeout(() => setCopied(false), 3000);
-      }}>{copied ? 'Copied' : tab.format === 'markdown' ? 'Copy Markdown' : 'Copy HTML'}</button>
-      <button className='button' onClick={() => download(tab)}>Download</button>
+      }}>{copied ? 'Copied' : item.format === 'markdown' ? 'Copy Markdown' : 'Copy HTML'}</button>
+      <button className='button' onClick={() => download(item)}>Download</button>
     </>}
   </div>;
 };
 
 const TabContent: React.FC<{ tab: ExtendedTab, report: LoadedReport | undefined }> = ({ tab, report }) => {
+  if (tab.format === 'insights')
+    return <><TabToolbar item={tab} /><InsightsView content={tab.content} report={report} /></>;
+  if (tab.format === 'iframe') {
+    return <iframe
+      className='extended-tab-iframe'
+      src={tab.content}
+      title={tab.title}
+      sandbox='allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads' />;
+  }
+  const sectionIds = new Set((tab.sections || []).map(s => s.id));
+  const blocks = sortSections([
+    ...(tab.sections || []),
+    ...(tab.placeholders || []).filter(p => !sectionIds.has(p.sectionId)).map(p => ({ id: p.sectionId, title: p.title, order: p.order, format: 'markdown' as const, content: p.markdown, placeholder: true })),
+  ]);
+  const whole = [tab.content, ...(tab.sections || []).map(s => `## ${s.title}\n\n${s.content}`)].join('\n\n');
+  return <>
+    <TabToolbar item={{ ...tab, content: whole }} />
+    {!!tab.content && <RichContent format={tab.format} content={tab.content} report={report} />}
+    {blocks.map(section => <div key={section.id} className='extended-section' data-testid={`extended-section-${section.id}`}>
+      <AutoChip header={section.title}>
+        {'placeholder' in section
+          ? <div className='extended-section-placeholder'><RichContent format='markdown' content={section.content} report={report} /></div>
+          : <>
+            <TabToolbar item={section} compact />
+            <RichContent format={section.format} content={section.content} report={report} />
+          </>}
+      </AutoChip>
+    </div>)}
+  </>;
+};
+
+/** Sanitized Markdown / HTML with in-report links (#?testId, #?test=, #?q=, #anchor). */
+const RichContent: React.FC<{ format: string, content: string, report: LoadedReport | undefined }> = ({ format, content, report }) => {
   const ref = React.useRef<HTMLDivElement>(null);
   const searchParams = useSearchParams();
-  const html = React.useMemo(() => {
-    if (tab.format === 'markdown')
-      return renderMarkdown(tab.content);
-    if (tab.format === 'html')
-      return sanitizeHtml(tab.content);
-    return '';
-  }, [tab]);
+  const html = React.useMemo(() => format === 'html' ? sanitizeHtml(content) : renderMarkdown(content), [format, content]);
 
   // Give headings ids so that `[see](#heading)` links and the browser's find work.
   React.useEffect(() => {
@@ -120,15 +149,6 @@ const TabContent: React.FC<{ tab: ExtendedTab, report: LoadedReport | undefined 
     target?.scrollIntoView({ block: 'start' });
   }, [report, searchParams]);
 
-  if (tab.format === 'insights')
-    return <InsightsView content={tab.content} report={report} />;
-  if (tab.format === 'iframe') {
-    return <iframe
-      className='extended-tab-iframe'
-      src={tab.content}
-      title={tab.title}
-      sandbox='allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads' />;
-  }
   return <div ref={ref} className='markdown-body' onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} />;
 };
 
@@ -164,7 +184,7 @@ function resolveTestHref(title: string, project: string | null, report: LoadedRe
   return '#?' + params.toString();
 }
 
-function download(tab: ExtendedTab) {
+function download(tab: Exportable) {
   const extension = tab.format === 'markdown' ? 'md' : 'html';
   const blob = new Blob([tab.content], { type: tab.format === 'markdown' ? 'text/markdown' : 'text/html' });
   const link = document.createElement('a');

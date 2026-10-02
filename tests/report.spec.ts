@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { pathToFileURL } from 'url';
 
-import { startReportServer } from '../dist/reporter/index.js';
+import { AgentService, llmConfigFromEnv, startReportServer } from '../dist/reporter/index.js';
 
 const root = path.resolve(__dirname, '..');
 const outputRoot = path.join(__dirname, '.output');
@@ -84,9 +84,26 @@ test('markdown tab renders and links into tests', async ({ page }) => {
   await expect(page.locator('.test-file-test')).toHaveCount(7);
 });
 
-test('failure clusters tab groups tests by error', async ({ page }) => {
+test('failure analysis tab merges the skill analysis with automatic grouping', async ({ page }) => {
   await openReport(page, '#?tab=failures');
-  const content = page.locator('.markdown-body');
+  await expect(page.getByTestId('extended-tab-failures')).toContainText('One place for everything known about the failures');
+  // No skill output yet: a placeholder explains how to add it.
+  await expect(page.getByTestId('extended-section-skill')).toContainText('pw-extended-report add-analysis');
+  cliRun('add-analysis', reportDir, '--file', 'example/ai-analysis.md', '--source', 'jenkins-log-skill');
+  await page.reload();
+  const skill = page.getByTestId('extended-section-skill');
+  await expect(skill.getByRole('heading', { name: 'Анализ прогона (пример вывода скилла)' })).toBeVisible();
+  await expect(skill).toContainText('Source: jenkins-log-skill');
+  // The skill section goes first, the automatic grouping after it.
+  const order = await page.locator('[data-testid^=extended-section-]').evaluateAll(els => els.map(e => e.getAttribute('data-testid')));
+  expect(order).toEqual(['extended-section-skill', 'extended-section-auto']);
+  await skill.getByRole('link', { name: 'adds item to cart' }).click();
+  await expect(page.locator('.header-title')).toHaveText('adds item to cart');
+});
+
+test('automatic grouping groups tests by error', async ({ page }) => {
+  await openReport(page, '#?tab=failures');
+  const content = page.getByTestId('extended-section-auto').locator('.markdown-body');
   await expect(content).toContainText('grouped into 6 distinct error(s)');
   const group = content.locator('#group-1');
   await expect(group).toContainText('expect(locator).toHaveText(expected) failed');
@@ -155,7 +172,7 @@ test('add-tab replaces a tab with the same id and keeps the report readable', as
 test.describe('insights tab', () => {
   let server: Awaited<ReturnType<typeof startReportServer>>;
   test.beforeAll(async () => {
-    server = await startReportServer(reportDir, { port: 0, ai: { mode: 'mock' } });
+    server = await startReportServer(reportDir, { port: 0, agent: new AgentService({ llm: llmConfigFromEnv({ mock: true }), reportDir }) });
   });
   test.afterAll(async () => {
     await server.close();
@@ -171,8 +188,13 @@ test.describe('insights tab', () => {
     await expect(card(page, 'cart › adds item to cart').getByTestId('insight-kind')).toHaveText('Test bug');
     await expect(card(page, 'checkout › flaky payment widget').getByTestId('insight-kind')).toHaveText('Flaky');
     // Filter by kind.
+    // The login test fails on an empty page: not blamed on the locator.
+    await expect(card(page, 'user can log in').getByTestId('insight-kind')).toHaveText('Unclassified');
+    await expect(card(page, 'user can log in')).toContainText('The page was empty when the test failed');
+    // reload() of a setContent page leaves it empty: also not a locator problem.
+    await expect(card(page, 'cart › cart survives reload')).toContainText('The page was empty when the test failed');
     await page.getByRole('button', { name: /^Test bug/ }).click();
-    await expect(page.getByTestId('insight-card')).toHaveCount(4);
+    await expect(page.getByTestId('insight-card')).toHaveCount(2);
   });
 
   test('shows network and browser errors from the trace', async ({ page }) => {
@@ -192,12 +214,14 @@ test.describe('insights tab', () => {
     await expect(flaky.locator('.attempt-column')).toHaveCount(2);
   });
 
-  test('asks AI through the gateway and offers fixes', async ({ page, context }) => {
+  test('asks the AI agent and offers fixes', async ({ page, context }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
     await page.goto(server.url + '#?tab=insights');
     const api = card(page, 'app › cart items are loaded from api');
     await api.getByRole('button', { name: 'Ask AI' }).click();
-    await expect(api.getByTestId('ai-answer')).toContainText('Classification: environment');
+    await expect(api.getByTestId('agent-answer')).toContainText('ENVIRONMENT');
+    await api.getByTestId('agent-evidence').locator('summary').click();
+    await expect(api.getByTestId('agent-evidence')).toContainText('GET http://demo.local/api/cart → 500');
     await api.getByRole('button', { name: 'Fix ▾' }).click();
     await page.getByRole('menuitem', { name: 'Copy rerun command' }).click();
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('npx playwright test "app.spec.ts:36" --project="chromium" --retries=0 --trace=on');
@@ -207,9 +231,9 @@ test.describe('insights tab', () => {
     await openReport(page, '#?tab=insights');
     const api = card(page, 'app › cart items are loaded from api');
     await api.getByRole('button', { name: 'Ask AI' }).click();
-    await expect(api.getByTestId('ai-panel')).toContainText('No AI endpoint is available');
+    await expect(api.getByTestId('agent-panel')).toContainText('The AI agent is not available');
     await api.getByText('Prompt preview').click();
-    await expect(api.getByTestId('ai-panel').locator('pre')).toContainText('GET http://demo.local/api/cart → 500');
+    await expect(api.getByTestId('agent-panel').locator('pre')).toContainText('GET http://demo.local/api/cart → 500');
   });
 
   test('history is recorded across runs', () => {

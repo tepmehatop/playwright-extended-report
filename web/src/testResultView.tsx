@@ -32,6 +32,7 @@ import { useAsyncMemo } from '@web/uiUtils';
 import type { LoadedReport } from './loadedReport';
 import { TestCaseListView } from './testFileView';
 import { stripAnsiEscapes } from '@isomorphic/stringUtils';
+import { TestPageAgentButtons, TestPageAgentPanel } from './extended/agent/testPageAgent'; // [extended-report]
 
 interface ImageDiffWithAnchors extends ImageDiff {
   anchors: string[];
@@ -136,11 +137,11 @@ export const TestResultView: React.FC<{
 
   return <div className='test-result'>
     {!!errors.length && <AutoChip header='Errors'>
-      {prompt && (
-        <div style={{ position: 'absolute', right: '16px', padding: '10px', zIndex: 1 }}>
-          <PromptButton prompt={prompt} />
-        </div>
-      )}
+      {/* [extended-report] Ask AI and Fix next to Copy prompt */}
+      <div style={{ position: 'absolute', right: '16px', padding: '10px', zIndex: 1, display: 'flex', gap: 6 }}>
+        <TestPageAgentButtons test={test} result={result} />
+        {prompt && <PromptButton prompt={prompt} />}
+      </div>
       {errors.map((error, index) => {
         const diff = pickDiffForError(error, diffs);
         return <>
@@ -149,6 +150,7 @@ export const TestResultView: React.FC<{
         </>;
       })}
     </AutoChip>}
+    {!!errors.length && <TestPageAgentPanel test={test} result={result} report={report} />}{/* [extended-report] */}
     {!!result.steps.length && <AutoChip header='Test Steps'>
       <form className='subnav-search step-filter' onSubmit={e => e.preventDefault()}>
         {icons.search()}

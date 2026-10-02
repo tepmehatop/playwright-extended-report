@@ -1,8 +1,12 @@
 # playwright-extended-report
 
-Клон штатного HTML-отчёта Playwright с возможностью добавлять **свои вкладки**:
-анализ логов Jenkins, AI-разбор падений, любые Markdown/HTML-страницы и встроенную
-вкладку **Failure analysis** (группировка упавших тестов по ошибке).
+Клон штатного HTML-отчёта Playwright с дополнительными вкладками и **AI-агентом для упавших тестов**,
+который работает с моделями закрытого контура (Proxy LLM, GigaChat, GigaCode):
+
+- **Failure analysis** — анализ вашего скилла (логи Jenkins) и встроенная группировка ошибок в одной вкладке;
+- **Insights** — классификация каждого падения, сеть и консоль из трейса, сравнение попыток, история;
+- **Ask AI / Fix** — глубокий анализ по трейсу и DOM, перезапуск и отладка, правка с диффом, применение и откат по кнопке;
+- свои вкладки с любым Markdown, HTML или страницей.
 
 Это **отдельный репортёр**: штатный `html`-отчёт продолжает генерироваться как раньше,
 а расширенный пишется в свою папку (`extended-report/` по умолчанию). Внешний вид, навигация,
@@ -43,10 +47,15 @@ npm run demo        # 5 прогонов демо-проекта (копится
   2. история прогонов: новые и известные падения, нестабильные тесты, регрессии длительности, «починилось с прошлого прогона»;
   3. сравнение упавшей и успешной попытки бок о бок: где разошлись шаги, что стало медленнее, скриншоты;
   4. упавшие сетевые запросы (4xx/5xx) и ошибки браузера (`console.error`, необработанные исключения) прямо из `trace.zip`;
-  5. кнопки **Ask AI** (через ваш LLM-шлюз, ключи не попадают в отчёт) и **Fix** (промпт для healer-агента Playwright, команда перезапуска, ссылка на Jenkins-джобу).
-- **Встроенная вкладка Failure analysis**: упавшие и flaky тесты сгруппированы по нормализованной сигнатуре ошибки
-  (тип, локатор, ожидание), с категорией (Assertion / Locator / Timeout / Network / Browser crash / Snapshot),
-  процентом падений и местом в коде, где ошибка возникает чаще всего.
+  5. кнопки **Ask AI** и **Fix ▾** — в карточках и на странице каждого упавшего теста рядом с «Copy prompt».
+- **AI-агент** ([docs/AGENT.md](docs/AGENT.md)): читает трейс (действия, лог ожидания, DOM на момент падения,
+  сеть, консоль, исходники), находит на странице элементы, похожие на упавший локатор, умеет перезапустить тест
+  локально и сравнить, предлагает правку с диффом, применяет её по кнопке с проверочным прогоном и откатом.
+  Поле «подсказка агенту» уводит его с ложного пути. Модели: Proxy LLM / OpenAI-compatible, GigaChat,
+  GigaCode IFT SSL, GigaCode CLI. Native tool calling не нужен.
+- **Вкладка Failure analysis**: вводное описание, **анализ вашего скилла** (`pw-extended-report add-analysis`)
+  и под ним **встроенная группировка** упавших тестов по нормализованной ошибке (категория, процент падений,
+  место в коде).
 - **`report-summary.json`** — машиночитаемая сводка (статистика, упавшие тесты с ошибками и путями к вложениям,
   кластеры). Это готовый вход для LLM или вашего скилла, без парсинга HTML и логов Jenkins.
 - **Совместимость**: использует только публичный Reporter API, проверено на Playwright **1.45, 1.52, 1.63**.
@@ -89,29 +98,42 @@ export default defineConfig({
 });
 ```
 
-### 3. После прогона: добавить вкладку со своим анализом
+### 3. После прогона: добавить анализ скилла
 
 ```bash
 npx playwright test || true
 
-# ваш скилл анализа логов Jenkins пишет analysis.md, затем:
-npx pw-extended-report add-tab extended-report \
-  --id ai --title "AI анализ" --icon sparkle \
-  --file analysis.md --badge 3 --badge-kind danger --source jenkins-log-skill --order 10
+# ваш скилл анализа логов Jenkins пишет analysis.md, затем — во вкладку Failure analysis:
+npx pw-extended-report add-analysis extended-report --file analysis.md --source "jenkins-log-skill #123"
 
-npx pw-extended-report show extended-report      # локальный просмотр
+npx pw-extended-report show extended-report      # просто посмотреть
 ```
+
+### 4. Разобрать падения с AI-агентом
+
+```bash
+cd my-autotests                                   # клон репозитория тестов
+export EXTENDED_REPORT_AI_PROVIDER=gigachat GIGACHAT_AUTHORIZATION_KEY=... EXTENDED_REPORT_AI_LANGUAGE=Russian
+npx pw-extended-report agent ./extended-report    # Ask AI, Run & debug, Propose fix, Apply & verify
+```
+
+Настройка всех провайдеров (Proxy LLM, GigaChat, GigaCode IFT SSL, GigaCode CLI) и режим для отчётов в Jenkins —
+в [docs/AGENT.md](docs/AGENT.md).
 
 Пример `Jenkinsfile` и настройка CSP для HTML Publisher: [docs/JENKINS.md](docs/JENKINS.md).
 
 ## CLI
 
 ```
-pw-extended-report add-tab   [report-dir] --id <id> (--file <path>|--content <text>) [options]
-pw-extended-report remove-tab [report-dir] --id <id>
-pw-extended-report list-tabs  [report-dir]
-pw-extended-report show       [report-dir] [--host] [--port] [--no-open] [--ai | --ai-mock]
-pw-extended-report ai-gateway [--host] [--port] [--ai-mock]
+pw-extended-report add-analysis   [report-dir] --file <path> [--title] [--source] [--optional]
+pw-extended-report add-section    [report-dir] --tab <tab-id> --id <id> (--file|--content) [--title]
+pw-extended-report remove-section [report-dir] --tab <tab-id> --id <id>
+pw-extended-report add-tab        [report-dir] --id <id> (--file <path>|--content <text>) [options]
+pw-extended-report remove-tab     [report-dir] --id <id>
+pw-extended-report list-tabs      [report-dir]
+pw-extended-report show           [report-dir] [--host] [--port] [--no-open] [--ai | --ai-mock] [--repo <dir>] [--config <file>]
+pw-extended-report agent          [report-dir] [--repo <dir>] [--config <file>] [--ai-mock]
+pw-extended-report ai-gateway     [--host] [--port] [--ai-mock]
 ```
 
 | Опция `add-tab` | Описание |
@@ -159,16 +181,22 @@ await upsertTab('extended-report', { id: 'ai', title: 'AI', file: 'analysis.md',
   `pw-extended-report show` или публикация в Jenkins.
 - **Шарды.** В объединённом (`merge-reports`) отчёте пустой таймлайн шардов в Speedboard: эти данные доступны
   только через внутренний API Playwright. Остальное работает.
-- **История** хранится в файле `extended-report-history.json`; в CI его нужно сохранять между билдами
-  (см. [docs/INSIGHTS.md](docs/INSIGHTS.md)). Без этого каждый прогон считается первым.
+- **История между прогонами выключена по умолчанию** (`insights: { history: {} }` — включить; файл нужно
+  сохранять между билдами, см. [docs/INSIGHTS.md](docs/INSIGHTS.md)). Сравнение попыток (ретраев) работает
+  внутри текущего прогона и без неё.
+- **AI-агент** запускает тесты и меняет файлы только в режиме `pw-extended-report agent` (локально, в репозитории
+  тестов) и только по кнопке Apply, с бэкапом и Revert. Добавьте `.pw-extended-report/` в `.gitignore`.
 - **Nexus.** `package-lock.json` в репозитории указывает на registry.npmjs.org. Во внутреннем контуре выполните
   `npm install` через ваш registry, чтобы lockfile пересоздался, и задайте пакету свой scope, например `@qa/…`
   ([docs/PUBLISHING.md](docs/PUBLISHING.md)).
-- **Классификация эвристическая**: правила объясняют решение через «evidence», а уточнять его должна LLM через «Ask AI».
+- **Классификация эвристическая**: правила объясняют решение через «evidence», а уточнять его должен AI-агент (Ask AI).
+- **AI-ответы в демо** (`--ai-mock`) — шаблоны: доказательства (DOM, лог, сеть, код) реальные, рассуждение — нет.
+  Качество настоящего анализа зависит от вашей модели и `EXTENDED_REPORT_AI_MAX_CHARS`.
 
 ## Документация
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — как устроен штатный отчёт Playwright и что изменено здесь.
+- [docs/AGENT.md](docs/AGENT.md) — AI-агент: подключение GigaChat / GigaCode / Proxy LLM, анализ, отладка, починка.
 - [docs/INSIGHTS.md](docs/INSIGHTS.md) — вкладка Insights: классификация, история, сеть и консоль, сравнение попыток, Ask AI, Fix.
 - [docs/CUSTOM_TABS.md](docs/CUSTOM_TABS.md) — формат вкладок, ссылки, как добавить свой тип вкладки в UI.
 - [docs/JENKINS.md](docs/JENKINS.md) — пайплайн, публикация отчёта, CSP.
