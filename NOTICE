@@ -1,0 +1,15 @@
+playwright-extended-report
+
+This product includes software developed by Microsoft Corporation as part of
+Playwright (https://github.com/microsoft/playwright), licensed under the
+Apache License, Version 2.0:
+
+  - web/src/**             (except web/src/extended/**) — Playwright HTML report UI,
+                           packages/html-reporter/src, with changes marked "[extended-report]"
+  - web/vendor/**          — Playwright packages/web/src, packages/isomorphic and
+                           packages/playwright/src/isomorphic/types.d.ts, unmodified
+  - src/reporter/html.ts   — port of packages/playwright/src/reporters/html.ts
+  - src/reporter/compat.ts — adapted helpers from Playwright internals
+  - upstream/html.ts       — unmodified reference copy
+
+Copyright (c) Microsoft Corporation.

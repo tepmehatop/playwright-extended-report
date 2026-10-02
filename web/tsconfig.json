@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "paths": {
+      "@web/*": ["./vendor/web/*"],
+      "@isomorphic/*": ["./vendor/isomorphic/*"],
+      "@testIsomorphic/*": ["./vendor/testIsomorphic/*"]
+    },
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "jsx": "react-jsx",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "noImplicitOverride": true,
+    "useUnknownInCatchVariables": false,
+    "useDefineForClassFields": false,
+    "skipLibCheck": true,
+    "types": []
+  },
+  "include": ["src", "vendor", "vite.config.ts"]
+}

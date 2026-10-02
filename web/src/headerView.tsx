@@ -26,6 +26,7 @@ import { filterWithQuery } from './filter';
 import { linkifyText } from '@web/renderUtils';
 import { Dialog } from '@web/shared/dialog';
 import { kThemeOptions, type Theme, useThemeSetting } from '@web/theme';
+import { ExtendedTabsNav, kTabParam } from './extended/extendedTabView'; // [extended-report]
 
 export const HeaderView: React.FC<{
   title: string | undefined,
@@ -101,6 +102,7 @@ const StatsNavView: React.FC<{
     <Link className='subnav-item' href='#?speedboard' title='Speedboard' aria-selected={isSpeedboard}>
       {icons.clock()}
     </Link>
+    <ExtendedTabsNav /> {/* [extended-report] */}
     <SettingsButton />
   </nav>;
 };
@@ -112,6 +114,7 @@ const NavLink: React.FC<{
   const searchParams = new URLSearchParams(useSearchParams());
   searchParams.delete('speedboard');
   searchParams.delete('testId');
+  searchParams.delete(kTabParam); // [extended-report]
 
   const queryToken = `s:${token}`;
 

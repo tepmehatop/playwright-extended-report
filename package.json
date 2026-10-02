@@ -1,0 +1,69 @@
+{
+  "name": "playwright-extended-report",
+  "version": "0.1.0",
+  "description": "Playwright HTML report clone with pluggable extra tabs (AI / log analysis, failure clusters, any Markdown or HTML).",
+  "license": "Apache-2.0",
+  "keywords": [
+    "playwright",
+    "reporter",
+    "html-report",
+    "test-report",
+    "ai"
+  ],
+  "main": "dist/reporter/index.js",
+  "types": "dist/reporter/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/reporter/index.d.ts",
+      "default": "./dist/reporter/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "pw-extended-report": "dist/cli/index.js"
+  },
+  "files": [
+    "dist",
+    "docs/*.md",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "npm run clean && npm run build:web && npm run build:node",
+    "build:web": "vite build --config web/vite.config.ts",
+    "build:node": "tsc -p tsconfig.node.json",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "dev": "vite --config web/vite.config.ts",
+    "typecheck": "tsc -p web/tsconfig.json && tsc -p tsconfig.node.json --noEmit",
+    "test": "playwright test -c tests/playwright.config.ts",
+    "prepack": "npm run build",
+    "sync-upstream": "node scripts/sync-upstream.mjs"
+  },
+  "peerDependencies": {
+    "@playwright/test": ">=1.45.0"
+  },
+  "dependencies": {
+    "@babel/code-frame": "^7.27.1",
+    "yazl": "^3.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/babel__code-frame": "7.27.0",
+    "@types/node": "^20.19.0",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@types/yazl": "3.3.1",
+    "@vitejs/plugin-react": "6.0.3",
+    "@zip.js/zip.js": "2.7.73",
+    "dompurify": "^3.2.6",
+    "marked": "^16.1.1",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "typescript": "6.0.3",
+    "vite": "8.1.0"
+  }
+}
